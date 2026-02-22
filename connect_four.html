@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phaser Four in a Row - Simple & Working</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #2c3e50; }
+    </style>
+</head>
+<body>
+
+<script>
+const ROWS = 6;
+const COLS = 7;
+const CELL_SIZE = 80;
+const WIDTH = COLS * CELL_SIZE;
+const HEIGHT = (ROWS + 2) * CELL_SIZE;
+
+const config = {
+    type: Phaser.AUTO,
+    width: WIDTH,
+    height: HEIGHT,
+    backgroundColor: '#2c3e50',
+    scene: { create: create }
+};
+
+const game = new Phaser.Game(config);
+
+function create() {
+    this.board = Array(ROWS).fill(null).map(() => Array(COLS).fill(0));
+    this.sprites = Array(ROWS).fill(null).map(() => Array(COLS).fill(null));
+    this.currentPlayer = 1; 
+    this.gameOver = false;
+
+    // Draw the Grid background once
+    const grid = this.add.graphics({ lineStyle: { width: 2, color: 0x34495e } });
+    for (let r = 0; r <= ROWS; r++) grid.lineBetween(0, r * CELL_SIZE, WIDTH, r * CELL_SIZE);
+    for (let c = 0; c <= COLS; c++) grid.lineBetween(c * CELL_SIZE, 0, c * CELL_SIZE, ROWS * CELL_SIZE);
+
+    this.statusText = this.add.text(WIDTH / 2, ROWS * CELL_SIZE + 40, "Red's Turn", { 
+        fontSize: '28px', fill: '#e74c3c', fontWeight: 'bold' 
+    }).setOrigin(0.5);
+
+    this.replayBtn = this.add.text(WIDTH / 2, ROWS * CELL_SIZE + 100, 'PLAY AGAIN', {
+        fontSize: '24px', fill: '#2ecc71', backgroundColor: '#fff', padding: { x: 10, y: 5 }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setVisible(false).on('pointerdown', () => this.scene.restart());
+
+    this.input.on('pointerdown', (pointer) => {
+        if (this.gameOver) return;
+        const col = Math.floor(pointer.x / CELL_SIZE);
+        if (col >= 0 && col < COLS) dropPiece.call(this, col);
+    });
+}
+
+function dropPiece(col) {
+    let row = -1;
+    for (let r = ROWS - 1; r >= 0; r--) {
+        if (this.board[r][col] === 0) { row = r; break; }
+    }
+
+    if (row === -1) return;
+
+    this.board[row][col] = this.currentPlayer;
+    const color = this.currentPlayer === 1 ? 0xe74c3c : 0xf1c40f;
+    
+    // Create piece at the top and drop it
+    const piece = this.add.circle(col * CELL_SIZE + 40, -40, 30, color);
+    this.sprites[row][col] = piece;
+
+    this.tweens.add({
+        targets: piece,
+        y: row * CELL_SIZE + 40,
+        duration: 400,
+        ease: 'Power2',
+        onComplete: () => {
+            const winCoords = checkWin.call(this, row, col);
+            if (winCoords) {
+                this.gameOver = true;
+                this.statusText.setText((this.currentPlayer === 1 ? "Red" : "Yellow") + " Wins!");
+                this.replayBtn.setVisible(true);
+                
+                // GLOW EFFECT
+                winCoords.forEach(([wr, wc]) => {
+                    const s = this.sprites[wr][wc];
+                    this.tweens.add({
+                        targets: s,
+                        alpha: 0.3,
+                        scale: 1.4,
+                        duration: 400,
+                        yoyo: true,
+                        repeat: -1
+                    });
+                });
+            } else if (this.board.flat().every(cell => cell !== 0)) {
+                this.statusText.setText("Draw!");
+                this.replayBtn.setVisible(true);
+            } else {
+                this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
+                this.statusText.setText(this.currentPlayer === 1 ? "Red's Turn" : "Yellow's Turn");
+                this.statusText.setFill(this.currentPlayer === 1 ? '#e74c3c' : '#f1c40f');
+            }
+        }
+    });
+}
+
+function checkWin(r, c) {
+    const p = this.board[r][c];
+    const directions = [[0,1],[1,0],[1,1],[1,-1]];
+    for (let [dr, dc] of directions) {
+        let coords = [[r, c]];
+        [[dr, dc], [-dr, -dc]].forEach(([tr, tc]) => {
+            let nr = r + tr, nc = c + tc;
+            while (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS && this.board[nr][nc] === p) {
+                coords.push([nr, nc]);
+                nr += tr; nc += tc;
+            }
+        });
+        if (coords.length >= 4) return coords;
+    }
+    return null;
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Catch - Deluxe Arcade</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { 
+            display: flex; justify-content: center; align-items: center; 
+            height: 100vh; margin: 0; background: #000; overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+
+<script>
+const config = {
+    type: Phaser.AUTO,
+    width: 450,
+    height: 600,
+    physics: {
+        default: 'arcade',
+        arcade: { gravity: { y: 300 }, debug: false }
+    },
+    scene: { create: create, update: update }
+};
+
+const game = new Phaser.Game(config);
+
+function create() {
+    // 1. Background & UI
+    this.add.graphics().fillGradientStyle(0x1a2a6c, 0x1a2a6c, 0xb21f1f, 0xfdbb2d, 1).fillRect(0, 0, 450, 600);
+    
+    this.score = 0;
+    this.gameOver = false;
+    
+    this.scoreText = this.add.text(20, 20, 'SCORE: 0', { 
+        fontSize: '32px', fill: '#fff', fontWeight: 'bold', fontFamily: 'Arial Black' 
+    });
+
+    // 2. The Player (The Catcher)
+    this.player = this.add.rectangle(225, 550, 80, 20, 0x00d2ff);
+    this.physics.add.existing(this.player);
+    this.player.body.setAllowGravity(false);
+    this.player.body.setImmovable(true);
+    this.player.body.setCollideWorldBounds(true);
+
+    // 3. Falling Items Groups
+    this.items = this.physics.add.group();
+
+    // 4. Spawning Logic
+    this.spawnTimer = this.time.addEvent({
+        delay: 800,
+        callback: spawnItem,
+        callbackScope: this,
+        loop: true
+    });
+
+    // 5. Collision Handling
+    this.physics.add.overlap(this.player, this.items, (player, item) => {
+        if (item.type === 'bomb') {
+            endGame.call(this);
+        } else {
+            collectItem.call(this, item);
+        }
+    });
+
+    // 6. Controls (Mouse/Touch)
+    this.input.on('pointermove', (pointer) => {
+        if (!this.gameOver) {
+            this.player.x = Phaser.Math.Clamp(pointer.x, 40, 410);
+        }
+    });
+}
+
+function spawnItem() {
+    if (this.gameOver) return;
+
+    const x = Phaser.Math.Between(30, 420);
+    const isBomb = Math.random() < 0.25; // 25% chance for a bomb
+    
+    let item;
+    if (isBomb) {
+        // Create a Bomb
+        item = this.add.circle(x, -20, 15, 0xff4b2b);
+        item.type = 'bomb';
+        // Add a "wick" to the bomb
+        const wick = this.add.rectangle(x, -35, 4, 10, 0xffffff);
+        this.items.add(item);
+    } else {
+        // Create a Diamond
+        item = this.add.star(x, -20, 5, 12, 22, 0x00ffcc);
+        item.type = 'point';
+        this.items.add(item);
+    }
+}
+
+function collectItem(item) {
+    this.score += 10;
+    this.scoreText.setText('SCORE: ' + this.score);
+    
+    // Pulse effect on text
+    this.tweens.add({ targets: this.scoreText, scale: 1.1, duration: 50, yoyo: true });
+
+    // Speed up spawning as score increases
+    if (this.score % 100 === 0 && this.spawnTimer.delay > 300) {
+        this.spawnTimer.delay -= 50;
+    }
+
+    item.destroy();
+}
+
+function update() {
+    // Clean up items that fall off screen
+    this.items.children.iterate((item) => {
+        if (item && item.y > 650) {
+            item.destroy();
+        }
+    });
+}
+
+function endGame() {
+    this.gameOver = true;
+    this.physics.pause();
+    this.cameras.main.shake(300, 0.05); // Arcade "Impact" feel
+    
+    this.player.setFillStyle(0xff0000);
+
+    const bg = this.add.rectangle(225, 300, 300, 200, 0x000000, 0.8);
+    this.add.text(225, 270, 'GAME OVER', { fontSize: '40px', fill: '#ff0000', fontWeight: 'bold' }).setOrigin(0.5);
+    this.add.text(225, 330, 'FINAL SCORE: ' + this.score, { fontSize: '20px', fill: '#fff' }).setOrigin(0.5);
+    this.add.text(225, 370, 'CLICK TO REPLAY', { fontSize: '16px', fill: '#00ffcc' }).setOrigin(0.5);
+
+    this.input.once('pointerdown', () => this.scene.restart());
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mine-Dash Final Fix</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #000; overflow: hidden; }
+    </style>
+</head>
+<body>
+
+<script>
+const config = {
+    type: Phaser.AUTO,
+    width: 800,
+    height: 400,
+    physics: {
+        default: 'arcade',
+        arcade: { gravity: { y: 1500 }, debug: false }
+    },
+    scene: { create: create, update: update }
+};
+
+const game = new Phaser.Game(config);
+
+function create() {
+    this.cameras.main.setBackgroundColor('#0f0c29');
+    
+    // --- State Variables ---
+    this.gameSpeed = 300; // Starting speed
+    this.score = 0;
+    this.gameOver = false;
+    this.canDoubleJump = false;
+
+    // --- Environment ---
+    this.ground = this.add.rectangle(400, 380, 800, 40, 0x24243e);
+    this.physics.add.existing(this.ground, true); 
+
+    // --- Player ---
+    this.player = this.add.rectangle(150, 300, 30, 30, 0x00d2ff);
+    this.physics.add.existing(this.player);
+    this.player.body.setCollideWorldBounds(true);
+
+    // --- Groups ---
+    this.obstacles = this.physics.add.group();
+
+    // --- UI ---
+    this.scoreText = this.add.text(20, 20, 'DISTANCE: 0m', { 
+        fontSize: '24px', fill: '#00d2ff', fontFamily: 'Arial' 
+    });
+
+    // --- Spawner ---
+    this.spawnTimer = this.time.addEvent({
+        delay: 1500,
+        callback: spawnObstacle,
+        callbackScope: this,
+        loop: true
+    });
+
+    // --- Input ---
+    this.input.on('pointerdown', handleJump, this);
+    this.spaceKey = this.input.keyboard.addKey('SPACE');
+
+    // --- Collisions ---
+    this.physics.add.collider(this.player, this.ground);
+    this.physics.add.overlap(this.player, this.obstacles, hitObstacle, null, this);
+}
+
+function handleJump() {
+    if (this.gameOver) return;
+
+    if (this.player.body.touching.down) {
+        this.player.body.setVelocityY(-600);
+        this.canDoubleJump = true;
+    } else if (this.canDoubleJump) {
+        this.player.body.setVelocityY(-500);
+        this.canDoubleJump = false;
+        this.player.setAngle(this.player.angle + 180);
+    }
+}
+
+function spawnObstacle() {
+    if (this.gameOver) return;
+
+    const x = 850;
+    const y = 340; // On the ground
+    
+    const obstacle = this.add.rectangle(x, y, 30, 40, 0xff0055);
+    this.physics.add.existing(obstacle);
+    
+    obstacle.body.setAllowGravity(false); 
+    obstacle.body.setVelocityX(-this.gameSpeed);
+    
+    this.obstacles.add(obstacle);
+
+    // Vary the next spawn time based on current speed
+    let nextDelay = Phaser.Math.Between(800, 1500) - (this.gameSpeed / 10);
+    this.spawnTimer.delay = Math.max(nextDelay, 600); 
+}
+
+function update(time, delta) {
+    if (this.gameOver) return;
+
+    if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+        handleJump.call(this);
+    }
+
+    // 1. Update Distance
+    this.score += delta * 0.01;
+    this.scoreText.setText('DISTANCE: ' + Math.floor(this.score) + 'm');
+
+    // 2. Slow Difficulty Curve (Previous version was too fast)
+    this.gameSpeed += 0.05; 
+
+    // 3. Obstacle Management
+    this.obstacles.children.iterate((child) => {
+        if (child) {
+            child.body.setVelocityX(-this.gameSpeed);
+            if (child.x < -50) {
+                child.destroy();
+            }
+        }
+    });
+
+    // 4. Create Ghost Trail
+    if (time % 100 < 20) {
+        let trail = this.add.rectangle(this.player.x, this.player.y, 30, 30, 0x00d2ff, 0.3);
+        this.tweens.add({
+            targets: trail,
+            alpha: 0,
+            x: this.player.x - 50,
+            duration: 200,
+            onComplete: () => trail.destroy()
+        });
+    }
+}
+
+function hitObstacle() {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    
+    this.physics.pause();
+    this.cameras.main.shake(200, 0.02);
+    this.player.setFillStyle(0xffffff);
+
+    this.add.text(400, 150, 'GAME OVER', { fontSize: '64px', fill: '#ff0055', fontWeight: 'bold' }).setOrigin(0.5);
+    this.add.text(400, 230, 'Final Distance: ' + Math.floor(this.score) + 'm', { fontSize: '24px', fill: '#fff' }).setOrigin(0.5);
+    this.add.text(400, 280, 'CLICK TO RESTART', { fontSize: '20px', fill: '#00d2ff' }).setOrigin(0.5);
+    
+    this.input.once('pointerdown', () => this.scene.restart());
+}
+</script>
+
+</body>
+</html>

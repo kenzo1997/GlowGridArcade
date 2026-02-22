@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phaser Tic-Tac-Toe Pro</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #2c3e50; font-family: sans-serif; }
+    </style>
+</head>
+<body>
+
+<script>
+const config = {
+    type: Phaser.AUTO,
+    width: 600,
+    height: 800, // Extra height for the button
+    backgroundColor: '#34495e',
+    scene: { preload: preload, create: create }
+};
+
+const game = new Phaser.Game(config);
+
+function preload() {}
+
+function create() {
+    this.board = [['', '', ''], ['', '', ''], ['', '', '']];
+    this.currentPlayer = 'X';
+    this.gameOver = false;
+    this.cellSize = 200;
+
+    // Draw Grid Lines
+    const grid = this.add.graphics({ lineStyle: { width: 4, color: 0xbdc3c7 } });
+    grid.lineBetween(200, 20, 200, 580);
+    grid.lineBetween(400, 20, 400, 580);
+    grid.lineBetween(20, 200, 580, 200);
+    grid.lineBetween(20, 400, 580, 400);
+
+    // Status Text
+    this.statusText = this.add.text(300, 640, "Player X's Turn", { fontSize: '32px', fill: '#fff' }).setOrigin(0.5);
+
+    // Replay Button (Hidden initially)
+    this.replayBtn = this.add.text(300, 720, 'REPLAY', {
+        fontSize: '40px',
+        fill: '#2ecc71',
+        backgroundColor: '#fff',
+        padding: { x: 20, y: 10 }
+    })
+    .setOrigin(0.5)
+    .setInteractive({ useHandCursor: true })
+    .setVisible(false)
+    .on('pointerdown', () => this.scene.restart());
+
+    // Click Logic
+    this.input.on('pointerdown', (pointer) => {
+        if (this.gameOver) return;
+        const col = Math.floor(pointer.x / 200);
+        const row = Math.floor(pointer.y / 200);
+
+        if (row < 3 && col < 3 && this.board[row][col] === '') {
+            makeMove.call(this, row, col);
+        }
+    });
+}
+
+function makeMove(row, col) {
+    this.board[row][col] = this.currentPlayer;
+    const x = col * 200 + 100;
+    const y = row * 200 + 100;
+    
+    this.add.text(x, y, this.currentPlayer, {
+        fontSize: '100px',
+        color: this.currentPlayer === 'X' ? '#e74c3c' : '#f1c40f'
+    }).setOrigin(0.5);
+
+    const winLine = checkWinner.call(this);
+
+    if (winLine) {
+        drawWinLine.call(this, winLine);
+        this.statusText.setText(`Player ${this.currentPlayer} Wins!`);
+        this.gameOver = true;
+        this.replayBtn.setVisible(true);
+    } else if (this.board.flat().every(cell => cell !== '')) {
+        this.statusText.setText("It's a Draw!");
+        this.gameOver = true;
+        this.replayBtn.setVisible(true);
+    } else {
+        this.currentPlayer = this.currentPlayer === 'X' ? 'O' : 'X';
+        this.statusText.setText(`Player ${this.currentPlayer}'s Turn`);
+    }
+}
+
+function checkWinner() {
+    const b = this.board;
+    // Rows
+    for (let i = 0; i < 3; i++) 
+        if (b[i][0] && b[i][0] === b[i][1] && b[i][1] === b[i][2]) return {type: 'h', row: i};
+    // Columns
+    for (let i = 0; i < 3; i++) 
+        if (b[0][i] && b[0][i] === b[1][i] && b[1][i] === b[2][i]) return {type: 'v', col: i};
+    // Diagonals
+    if (b[0][0] && b[0][0] === b[1][1] && b[1][1] === b[2][2]) return {type: 'd1'};
+    if (b[0][2] && b[0][2] === b[1][1] && b[1][1] === b[2][0]) return {type: 'd2'};
+    
+    return null;
+}
+
+function drawWinLine(line) {
+    const graphics = this.add.graphics({ lineStyle: { width: 8, color: 0x2ecc71 } });
+    if (line.type === 'h') {
+        graphics.lineBetween(50, line.row * 200 + 100, 550, line.row * 200 + 100);
+    } else if (line.type === 'v') {
+        graphics.lineBetween(line.col * 200 + 100, 50, line.col * 200 + 100, 550);
+    } else if (line.type === 'd1') {
+        graphics.lineBetween(50, 50, 550, 550);
+    } else if (line.type === 'd2') {
+        graphics.lineBetween(550, 50, 50, 550);
+    }
+}
+</script>
+
+</body>
+</html>
