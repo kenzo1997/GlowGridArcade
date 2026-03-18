@@ -3,125 +3,481 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phaser Four in a Row - Simple & Working</title>
+    <title>Four in a Row</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <style>
-        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #2c3e50; }
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #1a1a2e; }
     </style>
 </head>
 <body>
-
 <script>
-const ROWS = 6;
-const COLS = 7;
-const CELL_SIZE = 80;
-const WIDTH = COLS * CELL_SIZE;
-const HEIGHT = (ROWS + 2) * CELL_SIZE;
+const ROWS   = 6;
+const COLS   = 7;
+const CELL   = 80;
+const W      = COLS * CELL;        // 560
+const H      = (ROWS + 2) * CELL; // 640
+const P1     = 1;
+const P2     = 2;  // also used as AI id in vs-CPU mode
+
+const DEPTH_MAP = { easy: 2, medium: 4, hard: 7 };
+
+// Persist mode/difficulty across scene restarts
+let chosenMode       = null;   // null = show menu | '2p' | 'cpu'
+let chosenDifficulty = 'medium';
 
 const config = {
     type: Phaser.AUTO,
-    width: WIDTH,
-    height: HEIGHT,
-    backgroundColor: '#2c3e50',
-    scene: { create: create }
+    width: W, height: H,
+    backgroundColor: '#1a1a2e',
+    scene: { create }
 };
+new Phaser.Game(config);
 
-const game = new Phaser.Game(config);
+// ─────────────────────────────────────────────
+//  CREATE
+// ─────────────────────────────────────────────
 
 function create() {
-    this.board = Array(ROWS).fill(null).map(() => Array(COLS).fill(0));
-    this.sprites = Array(ROWS).fill(null).map(() => Array(COLS).fill(null));
-    this.currentPlayer = 1; 
-    this.gameOver = false;
+    this.board      = makeBoard();
+    this.sprites    = Array(ROWS).fill(null).map(() => Array(COLS).fill(null));
+    this.gameOver   = false;
+    this.aiThinking = false;
+    this.hoverCol   = -1;
+    this.mode       = chosenMode;
+    this.difficulty = chosenDifficulty;
 
-    // Draw the Grid background once
-    const grid = this.add.graphics({ lineStyle: { width: 2, color: 0x34495e } });
-    for (let r = 0; r <= ROWS; r++) grid.lineBetween(0, r * CELL_SIZE, WIDTH, r * CELL_SIZE);
-    for (let c = 0; c <= COLS; c++) grid.lineBetween(c * CELL_SIZE, 0, c * CELL_SIZE, ROWS * CELL_SIZE);
+    // currentPlayer: always starts as P1 (red)
+    // In 2p mode both players are human; in cpu mode P1=human P2=AI
+    this.currentPlayer = P1;
+    this.humanTurn     = true; // false only while AI is computing
 
-    this.statusText = this.add.text(WIDTH / 2, ROWS * CELL_SIZE + 40, "Red's Turn", { 
-        fontSize: '28px', fill: '#e74c3c', fontWeight: 'bold' 
-    }).setOrigin(0.5);
-
-    this.replayBtn = this.add.text(WIDTH / 2, ROWS * CELL_SIZE + 100, 'PLAY AGAIN', {
-        fontSize: '24px', fill: '#2ecc71', backgroundColor: '#fff', padding: { x: 10, y: 5 }
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setVisible(false).on('pointerdown', () => this.scene.restart());
-
-    this.input.on('pointerdown', (pointer) => {
-        if (this.gameOver) return;
-        const col = Math.floor(pointer.x / CELL_SIZE);
-        if (col >= 0 && col < COLS) dropPiece.call(this, col);
-    });
+    if (!this.mode) {
+        showMenu.call(this);
+    } else {
+        startGame.call(this);
+    }
 }
 
-function dropPiece(col) {
-    let row = -1;
-    for (let r = ROWS - 1; r >= 0; r--) {
-        if (this.board[r][col] === 0) { row = r; break; }
+// ─────────────────────────────────────────────
+//  MENU  — two sections: mode then difficulty
+// ─────────────────────────────────────────────
+
+function showMenu() {
+    this.add.rectangle(W/2, H/2, W, H, 0x0d0d1a);
+
+    this.add.text(W/2, 80, 'FOUR IN A ROW', {
+        fontSize: '34px', fill: '#fff', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5);
+
+    // ── Mode section ──
+    this.add.text(W/2, 148, 'CHOOSE MODE', {
+        fontSize: '13px', fill: '#ffffff44', fontFamily: 'monospace', letterSpacing: 4
+    }).setOrigin(0.5);
+
+    makeBtn.call(this, W/2, 200, '👤  2 PLAYERS', 0x00d2ff, () => {
+        chosenMode = '2p';
+        this.scene.restart();
+    });
+
+    makeBtn.call(this, W/2, 272, '🤖  VS COMPUTER', 0xe74c3c, () => {
+        // Don't start yet — reveal difficulty picker
+        showDifficultySection.call(this);
+    }, 'cpuBtn');
+
+    // ── Difficulty section (hidden initially) ──
+    this.diffSection = this.add.container(0, 0).setVisible(false);
+
+    const divider = this.add.text(W/2, 348, '── DIFFICULTY ──', {
+        fontSize: '12px', fill: '#ffffff33', fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    const diffs  = ['easy',    'medium',  'hard'];
+    const dcols  = [0x2ecc71,  0xf1c40f,  0xe74c3c];
+    const dlbls  = ['EASY',    'MEDIUM',  'HARD'];
+    const dBtns  = [];
+
+    diffs.forEach((diff, i) => {
+        const y      = 400 + i * 68;
+        const isActive = diff === chosenDifficulty;
+        const bg = this.add.rectangle(W/2, y, 240, 48, dcols[i], isActive ? 0.4 : 0.1)
+            .setStrokeStyle(2, dcols[i], isActive ? 1 : 0.4)
+            .setInteractive({ useHandCursor: true });
+        const txt = this.add.text(W/2, y, dlbls[i], {
+            fontSize: '22px', fill: '#fff', fontFamily: 'monospace', fontStyle: 'bold'
+        }).setOrigin(0.5);
+
+        bg.on('pointermove', () => bg.setFillStyle(dcols[i], 0.35));
+        bg.on('pointerout',  () => bg.setFillStyle(dcols[i], diff === chosenDifficulty ? 0.4 : 0.1));
+        bg.on('pointerdown', () => {
+            chosenDifficulty = diff;
+            chosenMode = 'cpu';
+            this.scene.restart();
+        });
+        dBtns.push(bg, txt);
+    });
+
+    this.diffSection.add([divider, ...dBtns]);
+
+    // Wins display
+    const wins = localStorage.getItem('c4_wins') || 0;
+    this.add.text(W/2, H - 28, 'CPU wins recorded: ' + wins, {
+        fontSize: '13px', fill: '#f1c40f66', fontFamily: 'monospace'
+    }).setOrigin(0.5);
+}
+
+function showDifficultySection() {
+    if (this.diffSection) this.diffSection.setVisible(true);
+}
+
+function makeBtn(x, y, label, color, callback, tag) {
+    const btn = this.add.rectangle(x, y, 280, 54, color, 0.12)
+        .setStrokeStyle(2, color, 0.7)
+        .setInteractive({ useHandCursor: true });
+    this.add.text(x, y, label, {
+        fontSize: '22px', fill: '#fff', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5);
+    btn.on('pointermove', () => btn.setFillStyle(color, 0.3));
+    btn.on('pointerout',  () => btn.setFillStyle(color, 0.12));
+    btn.on('pointerdown', callback);
+    if (tag) this[tag] = btn;
+    return btn;
+}
+
+// ─────────────────────────────────────────────
+//  GAME SETUP
+// ─────────────────────────────────────────────
+
+function startGame() {
+    // Board background
+    this.add.rectangle(W/2, ROWS*CELL/2, W, ROWS*CELL, 0x0f3460).setDepth(0);
+
+    // Grid lines
+    const grid = this.add.graphics().setDepth(1);
+    grid.lineStyle(1, 0x1a4a7a, 0.5);
+    for (let r = 0; r <= ROWS; r++) grid.lineBetween(0, r*CELL, W, r*CELL);
+    for (let c = 0; c <= COLS; c++) grid.lineBetween(c*CELL, 0, c*CELL, ROWS*CELL);
+
+    // Hover graphics & preview piece
+    this.hoverGfx    = this.add.graphics().setDepth(1);
+    this.previewPiece = this.add.circle(-100, 0, 28, 0xe74c3c, 0.35).setDepth(3);
+
+    // Status bar
+    this.add.rectangle(W/2, ROWS*CELL + CELL/2, W, CELL, 0x0a1628).setDepth(0);
+    this.statusText = this.add.text(W/2, ROWS*CELL + CELL/2, '', {
+        fontSize: '24px', fill: '#e74c3c', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5);
+
+    // Mode / difficulty badge top-right
+    const badgeLabel = this.mode === '2p' ? '2 PLAYERS' : this.difficulty.toUpperCase();
+    const badgeColor = this.mode === '2p' ? '#00d2ff'   : { easy:'#2ecc71', medium:'#f1c40f', hard:'#e74c3c' }[this.difficulty];
+    this.add.text(W-10, ROWS*CELL + 8, badgeLabel, {
+        fontSize: '12px', fill: badgeColor, fontFamily: 'monospace'
+    }).setOrigin(1,0).setDepth(5);
+
+    // ← Menu button
+    const menuBtn = this.add.text(10, ROWS*CELL + 8, '← MENU', {
+        fontSize: '12px', fill: '#ffffff55', fontFamily: 'monospace'
+    }).setOrigin(0,0).setDepth(5).setInteractive({ useHandCursor: true });
+    menuBtn.on('pointerover', () => menuBtn.setFill('#fff'));
+    menuBtn.on('pointerout',  () => menuBtn.setFill('#ffffff55'));
+    menuBtn.on('pointerdown', () => { chosenMode = null; this.scene.restart(); });
+
+    // Play Again (hidden until end)
+    this.replayBtn = this.add.text(W/2, ROWS*CELL + CELL + CELL/2, 'PLAY AGAIN', {
+        fontSize: '22px', fill: '#fff', fontFamily: 'monospace',
+        backgroundColor: '#2ecc7133', padding: { x: 18, y: 8 }
+    }).setOrigin(0.5).setDepth(5).setVisible(false)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.scene.restart());
+
+    // Input
+    this.input.on('pointermove', (ptr) => onHover.call(this, ptr));
+    this.input.on('pointerout',  ()    => clearHover.call(this));
+    this.input.on('pointerdown', (ptr) => onClickCol.call(this, ptr));
+
+    updateStatusText.call(this);
+}
+
+// ─────────────────────────────────────────────
+//  STATUS TEXT
+// ─────────────────────────────────────────────
+
+function updateStatusText() {
+    if (this.mode === '2p') {
+        const label = this.currentPlayer === P1 ? "🔴 Red's turn" : "🟡 Yellow's turn";
+        const color = this.currentPlayer === P1 ? '#e74c3c' : '#f1c40f';
+        this.statusText.setText(label).setFill(color);
+    } else {
+        if (this.currentPlayer === P1) {
+            this.statusText.setText('Your turn').setFill('#e74c3c');
+        } else {
+            this.statusText.setText('CPU thinking...').setFill('#f1c40f');
+        }
     }
+}
 
-    if (row === -1) return;
+// ─────────────────────────────────────────────
+//  INPUT
+// ─────────────────────────────────────────────
 
-    this.board[row][col] = this.currentPlayer;
-    const color = this.currentPlayer === 1 ? 0xe74c3c : 0xf1c40f;
-    
-    // Create piece at the top and drop it
-    const piece = this.add.circle(col * CELL_SIZE + 40, -40, 30, color);
+function isHumanTurn() {
+    // In 2p mode it's always a human's turn (when game not over)
+    // In cpu mode it's only human when currentPlayer === P1
+    return this.mode === '2p' || this.currentPlayer === P1;
+}
+
+function onHover(ptr) {
+    if (this.gameOver || !isHumanTurn.call(this) || this.aiThinking) return;
+    const col = Math.floor(ptr.x / CELL);
+    if (col < 0 || col >= COLS) { clearHover.call(this); return; }
+    if (col === this.hoverCol) return;
+    this.hoverCol = col;
+
+    // Column highlight
+    this.hoverGfx.clear();
+    this.hoverGfx.fillStyle(0xffffff, 0.04);
+    this.hoverGfx.fillRect(col * CELL, 0, CELL, ROWS * CELL);
+
+    // Preview piece — colour matches current player
+    const topRow = getTopRow.call(this, col);
+    const previewColor = this.currentPlayer === P1 ? 0xe74c3c : 0xf1c40f;
+    this.previewPiece.setFillStyle(previewColor);
+    if (topRow >= 0) {
+        this.previewPiece.x = col * CELL + CELL/2;
+        this.previewPiece.y = topRow * CELL + CELL/2;
+        this.previewPiece.setAlpha(0.38);
+    } else {
+        this.previewPiece.setAlpha(0);
+    }
+}
+
+function clearHover() {
+    this.hoverCol = -1;
+    this.hoverGfx.clear();
+    this.previewPiece.setAlpha(0);
+}
+
+function onClickCol(ptr) {
+    if (this.gameOver || !isHumanTurn.call(this) || this.aiThinking) return;
+    const col = Math.floor(ptr.x / CELL);
+    if (col < 0 || col >= COLS) return;
+    dropPiece.call(this, col, this.currentPlayer);
+}
+
+// ─────────────────────────────────────────────
+//  PIECE DROP
+// ─────────────────────────────────────────────
+
+function dropPiece(col, player) {
+    const row = getTopRow.call(this, col);
+    if (row < 0) return;
+
+    clearHover.call(this);
+
+    this.board[row][col] = player;
+    const color = player === P1 ? 0xe74c3c : 0xf1c40f;
+    const piece = this.add.circle(col * CELL + CELL/2, -CELL/2, 30, color).setDepth(2);
     this.sprites[row][col] = piece;
 
     this.tweens.add({
         targets: piece,
-        y: row * CELL_SIZE + 40,
-        duration: 400,
-        ease: 'Power2',
-        onComplete: () => {
-            const winCoords = checkWin.call(this, row, col);
-            if (winCoords) {
-                this.gameOver = true;
-                this.statusText.setText((this.currentPlayer === 1 ? "Red" : "Yellow") + " Wins!");
-                this.replayBtn.setVisible(true);
-                
-                // GLOW EFFECT
-                winCoords.forEach(([wr, wc]) => {
-                    const s = this.sprites[wr][wc];
-                    this.tweens.add({
-                        targets: s,
-                        alpha: 0.3,
-                        scale: 1.4,
-                        duration: 400,
-                        yoyo: true,
-                        repeat: -1
-                    });
-                });
-            } else if (this.board.flat().every(cell => cell !== 0)) {
-                this.statusText.setText("Draw!");
-                this.replayBtn.setVisible(true);
-            } else {
-                this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
-                this.statusText.setText(this.currentPlayer === 1 ? "Red's Turn" : "Yellow's Turn");
-                this.statusText.setFill(this.currentPlayer === 1 ? '#e74c3c' : '#f1c40f');
-            }
-        }
+        y: row * CELL + CELL/2,
+        duration: Math.max(180, row * 60),
+        ease: 'Bounce.Out',
+        onComplete: () => afterDrop.call(this, row, col, player)
     });
 }
 
-function checkWin(r, c) {
-    const p = this.board[r][c];
-    const directions = [[0,1],[1,0],[1,1],[1,-1]];
-    for (let [dr, dc] of directions) {
-        let coords = [[r, c]];
-        [[dr, dc], [-dr, -dc]].forEach(([tr, tc]) => {
-            let nr = r + tr, nc = c + tc;
-            while (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS && this.board[nr][nc] === p) {
-                coords.push([nr, nc]);
-                nr += tr; nc += tc;
+function afterDrop(row, col, player) {
+    const winCoords = checkWin(this.board, row, col, player);
+
+    if (winCoords) {
+        this.gameOver = true;
+
+        if (this.mode === '2p') {
+            const winner = player === P1 ? '🔴 Red wins!' : '🟡 Yellow wins!';
+            const color  = player === P1 ? '#e74c3c' : '#f1c40f';
+            this.statusText.setText(winner).setFill(color);
+        } else {
+            if (player === P1) {
+                this.statusText.setText('🏆 You win!').setFill('#e74c3c');
+                const prev = parseInt(localStorage.getItem('c4_wins') || 0);
+                localStorage.setItem('c4_wins', prev + 1);
+            } else {
+                this.statusText.setText('🤖 CPU wins!').setFill('#f1c40f');
             }
+        }
+
+        this.replayBtn.setVisible(true);
+
+        // Pulse winning pieces
+        winCoords.forEach(([wr, wc]) => {
+            this.tweens.add({
+                targets: this.sprites[wr][wc],
+                alpha: 0.25, scale: 1.45,
+                duration: 380, yoyo: true, repeat: -1
+            });
         });
+        return;
+    }
+
+    if (this.board.flat().every(c => c !== 0)) {
+        this.gameOver = true;
+        this.statusText.setText("It's a draw!").setFill('#aaa');
+        this.replayBtn.setVisible(true);
+        return;
+    }
+
+    // Switch to next player
+    this.currentPlayer = this.currentPlayer === P1 ? P2 : P1;
+
+    if (this.mode === 'cpu' && this.currentPlayer === P2) {
+        // AI's turn
+        this.aiThinking = true;
+        updateStatusText.call(this);
+        this.time.delayedCall(320, () => doAiMove.call(this));
+    } else {
+        updateStatusText.call(this);
+    }
+}
+
+// ─────────────────────────────────────────────
+//  AI  (minimax + alpha-beta)
+// ─────────────────────────────────────────────
+
+function doAiMove() {
+    const depth = DEPTH_MAP[this.difficulty] || 4;
+    const col   = getBestMove(this.board, depth);
+    this.aiThinking = false;
+    dropPiece.call(this, col, P2);
+}
+
+function getBestMove(board, depth) {
+    let bestScore = -Infinity;
+    let bestCol   = getValidCols(board)[0];
+    for (const col of getValidCols(board)) {
+        const row = getDropRow(board, col);
+        board[row][col] = P2;
+        const score = minimax(board, depth - 1, -Infinity, Infinity, false);
+        board[row][col] = 0;
+        if (score > bestScore) { bestScore = score; bestCol = col; }
+    }
+    return bestCol;
+}
+
+function minimax(board, depth, alpha, beta, isMax) {
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            if (!board[r][c]) continue;
+            const w = checkWin(board, r, c, board[r][c]);
+            if (w) return board[r][c] === P2 ? 100000 + depth : -100000 - depth;
+        }
+    }
+    const valid = getValidCols(board);
+    if (depth === 0 || valid.length === 0) return scoreBoard(board);
+
+    if (isMax) {
+        let best = -Infinity;
+        for (const col of valid) {
+            const row = getDropRow(board, col);
+            board[row][col] = P2;
+            best  = Math.max(best, minimax(board, depth-1, alpha, beta, false));
+            board[row][col] = 0;
+            alpha = Math.max(alpha, best);
+            if (alpha >= beta) break;
+        }
+        return best;
+    } else {
+        let best = Infinity;
+        for (const col of valid) {
+            const row = getDropRow(board, col);
+            board[row][col] = P1;
+            best = Math.min(best, minimax(board, depth-1, alpha, beta, true));
+            board[row][col] = 0;
+            beta = Math.min(beta, best);
+            if (alpha >= beta) break;
+        }
+        return best;
+    }
+}
+
+function scoreBoard(board) {
+    let score = 0;
+    const centre = Math.floor(COLS / 2);
+    for (let r = 0; r < ROWS; r++) {
+        if (board[r][centre] === P2)     score += 3;
+        else if (board[r][centre] === P1) score -= 3;
+    }
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            for (const [dr,dc] of dirs) {
+                const win = [];
+                for (let i = 0; i < 4; i++) {
+                    const nr = r+dr*i, nc = c+dc*i;
+                    if (nr>=0&&nr<ROWS&&nc>=0&&nc<COLS) win.push(board[nr][nc]);
+                }
+                if (win.length === 4) score += scoreWindow(win);
+            }
+        }
+    }
+    return score;
+}
+
+function scoreWindow(w) {
+    const ai = w.filter(x => x===P2).length;
+    const pl = w.filter(x => x===P1).length;
+    const em = w.filter(x => x===0).length;
+    if (ai===4)           return  100;
+    if (ai===3 && em===1) return   10;
+    if (ai===2 && em===2) return    3;
+    if (pl===4)           return -100;
+    if (pl===3 && em===1) return  -80;
+    if (pl===2 && em===2) return   -3;
+    return 0;
+}
+
+// ─────────────────────────────────────────────
+//  WIN CHECK
+// ─────────────────────────────────────────────
+
+function checkWin(board, r, c, player) {
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (const [dr,dc] of dirs) {
+        let coords = [[r,c]];
+        for (const [tr,tc] of [[dr,dc],[-dr,-dc]]) {
+            let nr=r+tr, nc=c+tc;
+            while (nr>=0&&nr<ROWS&&nc>=0&&nc<COLS&&board[nr][nc]===player) {
+                coords.push([nr,nc]); nr+=tr; nc+=tc;
+            }
+        }
         if (coords.length >= 4) return coords;
     }
     return null;
 }
-</script>
 
+// ─────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────
+
+function makeBoard() {
+    return Array(ROWS).fill(null).map(() => Array(COLS).fill(0));
+}
+
+function getValidCols(board) {
+    // Centre-first ordering improves alpha-beta pruning
+    return [3,2,4,1,5,0,6].filter(c => board[0][c] === 0);
+}
+
+function getDropRow(board, col) {
+    for (let r = ROWS-1; r >= 0; r--) if (board[r][col]===0) return r;
+    return -1;
+}
+
+function getTopRow(col) {
+    for (let r = ROWS-1; r >= 0; r--) if (this.board[r][col]===0) return r;
+    return -1;
+}
+</script>
 </body>
 </html>

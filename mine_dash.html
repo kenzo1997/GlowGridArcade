@@ -3,155 +3,227 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mine-Dash Final Fix</title>
+    <title>Mine Dash</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <style>
         body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #000; overflow: hidden; }
     </style>
 </head>
 <body>
-
 <script>
+const W = 800, H = 400;
+const GROUND_Y    = 340;
+const GROUND_H    = 80;
+const PLAYER_SIZE = 28;
+
 const config = {
     type: Phaser.AUTO,
-    width: 800,
-    height: 400,
-    physics: {
-        default: 'arcade',
-        arcade: { gravity: { y: 1500 }, debug: false }
-    },
-    scene: { create: create, update: update }
+    width: W, height: H,
+    physics: { default: 'arcade', arcade: { gravity:{ y: 1800 }, debug: false } },
+    scene: { create, update }
 };
-
-const game = new Phaser.Game(config);
+new Phaser.Game(config);
 
 function create() {
-    this.cameras.main.setBackgroundColor('#0f0c29');
-    
-    // --- State Variables ---
-    this.gameSpeed = 300; // Starting speed
-    this.score = 0;
-    this.gameOver = false;
+    this.cameras.main.setBackgroundColor('#0a0a1a');
+    this.gameOver      = false;
+    this.score         = 0;
+    this.gameSpeed     = 280;
     this.canDoubleJump = false;
+    this.jumpCount     = 0;
+    this.trailTimer    = 0;
+    this.bgStars       = [];
 
-    // --- Environment ---
-    this.ground = this.add.rectangle(400, 380, 800, 40, 0x24243e);
-    this.physics.add.existing(this.ground, true); 
+    // Starfield background
+    for (let i = 0; i < 80; i++) {
+        const star = this.add.rectangle(
+            Phaser.Math.Between(0, W),
+            Phaser.Math.Between(0, GROUND_Y - 20),
+            Phaser.Math.FloatBetween(1, 2.5),
+            Phaser.Math.FloatBetween(1, 2.5),
+            0xffffff,
+            Phaser.Math.FloatBetween(0.1, 0.5)
+        );
+        star.scrollFactor = Phaser.Math.FloatBetween(0.2, 0.8);
+        this.bgStars.push(star);
+    }
 
-    // --- Player ---
-    this.player = this.add.rectangle(150, 300, 30, 30, 0x00d2ff);
+    // Ground — use a static image/body directly, no group complications
+    this.groundVisual = this.add.rectangle(W/2, GROUND_Y + GROUND_H/2, W, GROUND_H, 0x16213e);
+    this.ground = this.physics.add.image(W/2, GROUND_Y, 'ground');
+
+    // Since we have no texture, build the ground as a plain static body manually
+    // Use a zone with a static arcade body instead
+    this.ground = this.add.zone(W/2, GROUND_Y, W, 4);
+    this.physics.world.enable(this.ground, Phaser.Physics.Arcade.STATIC_BODY);
+
+    // Ground glow line
+    this.add.rectangle(W/2, GROUND_Y, W, 3, 0x00d2ff, 0.7);
+
+    // Player
+    this.player = this.add.rectangle(140, GROUND_Y - PLAYER_SIZE, PLAYER_SIZE, PLAYER_SIZE, 0x00d2ff).setDepth(10);
     this.physics.add.existing(this.player);
     this.player.body.setCollideWorldBounds(true);
+    this.player.body.setMaxVelocityY(1200);
 
-    // --- Groups ---
-    this.obstacles = this.physics.add.group();
-
-    // --- UI ---
-    this.scoreText = this.add.text(20, 20, 'DISTANCE: 0m', { 
-        fontSize: '24px', fill: '#00d2ff', fontFamily: 'Arial' 
+    // Player ↔ ground collider — reset jump when landing
+    this.physics.add.collider(this.player, this.ground, () => {
+        this.jumpCount     = 0;
+        this.canDoubleJump = false;
     });
 
-    // --- Spawner ---
+    // Obstacles group
+    this.obstacles = this.physics.add.group();
+
     this.spawnTimer = this.time.addEvent({
-        delay: 1500,
+        delay: 1400,
         callback: spawnObstacle,
         callbackScope: this,
         loop: true
     });
 
-    // --- Input ---
-    this.input.on('pointerdown', handleJump, this);
-    this.spaceKey = this.input.keyboard.addKey('SPACE');
+    // UI
+    this.scoreText = this.add.text(16, 16, 'DISTANCE: 0m', {
+        fontSize:'22px', fill:'#00d2ff', fontFamily:'monospace', fontStyle:'bold'
+    }).setDepth(20);
+    const best = localStorage.getItem('minedash_best') || 0;
+    this.bestText = this.add.text(W - 16, 16, 'BEST: ' + best + 'm', {
+        fontSize:'18px', fill:'#f1c40f', fontFamily:'monospace'
+    }).setOrigin(1,0).setDepth(20);
+    this.add.text(W/2, H - 12, 'SPACE / TAP to jump  •  Double jump!', {
+        fontSize:'13px', fill:'#ffffff44', fontFamily:'monospace'
+    }).setOrigin(0.5, 1).setDepth(20);
 
-    // --- Collisions ---
-    this.physics.add.collider(this.player, this.ground);
-    this.physics.add.overlap(this.player, this.obstacles, hitObstacle, null, this);
+    // Input
+    this.spaceKey = this.input.keyboard.addKey('SPACE');
+    this.input.on('pointerdown', () => handleJump.call(this));
+
+    // Overlap: player hits obstacle = game over
+    this.physics.add.overlap(this.player, this.obstacles, () => triggerGameOver.call(this));
 }
 
 function handleJump() {
     if (this.gameOver) return;
 
-    if (this.player.body.touching.down) {
-        this.player.body.setVelocityY(-600);
+    const onGround = this.player.body.blocked.down;
+    if (onGround || this.jumpCount === 0) {
+        this.player.body.setVelocityY(-720);
+        this.jumpCount     = 1;
         this.canDoubleJump = true;
-    } else if (this.canDoubleJump) {
-        this.player.body.setVelocityY(-500);
+        jumpFX.call(this, false);
+    } else if (this.canDoubleJump && this.jumpCount === 1) {
+        this.player.body.setVelocityY(-620);
+        this.jumpCount     = 2;
         this.canDoubleJump = false;
-        this.player.setAngle(this.player.angle + 180);
+        this.tweens.add({ targets: this.player, angle: 360, duration: 300, ease: 'Linear' });
+        jumpFX.call(this, true);
     }
+}
+
+function jumpFX(isDouble) {
+    this.tweens.add({ targets: this.player, scaleY: 0.5, scaleX: 1.5, duration: 60, yoyo: true });
+    const ring = this.add.circle(this.player.x, this.player.y, 5, isDouble ? 0xff00ff : 0x00d2ff, 0.7).setDepth(9);
+    this.tweens.add({ targets: ring, radius: 35, alpha: 0, duration: 250, onComplete: () => ring.destroy() });
 }
 
 function spawnObstacle() {
     if (this.gameOver) return;
 
-    const x = 850;
-    const y = 340; // On the ground
-    
-    const obstacle = this.add.rectangle(x, y, 30, 40, 0xff0055);
-    this.physics.add.existing(obstacle);
-    
-    obstacle.body.setAllowGravity(false); 
-    obstacle.body.setVelocityX(-this.gameSpeed);
-    
-    this.obstacles.add(obstacle);
+    const type = Phaser.Math.Between(0, 2);
+    let obsX = W + 30;
+    let obsY, obsW, obsH, obsColor;
 
-    // Vary the next spawn time based on current speed
-    let nextDelay = Phaser.Math.Between(800, 1500) - (this.gameSpeed / 10);
-    this.spawnTimer.delay = Math.max(nextDelay, 600); 
+    if (type === 0) {
+        // Tall spike
+        obsH = 55; obsW = 22; obsColor = 0xff0055;
+        obsY = GROUND_Y - obsH / 2;
+    } else if (type === 1) {
+        // Low wide barrier
+        obsH = 28; obsW = 50; obsColor = 0xff6600;
+        obsY = GROUND_Y - obsH / 2;
+    } else {
+        // Double-height spike (requires double jump)
+        obsH = 95; obsW = 20; obsColor = 0xcc00ff;
+        obsY = GROUND_Y - obsH / 2;
+    }
+
+    const obs = this.add.rectangle(obsX, obsY, obsW, obsH, obsColor);
+
+    // KEY FIX: add to group FIRST, then configure the body.
+    // group.add() resets the body (gravity, velocity etc), so any body
+    // setup done before it gets wiped. Always configure AFTER group.add().
+    this.physics.add.existing(obs);
+    this.obstacles.add(obs);           // <-- group add first
+    obs.body.setAllowGravity(false);   // <-- body config after
+    obs.body.setVelocityX(-this.gameSpeed);
+
+    // Vary next spawn delay
+    const nextDelay = Math.max(550, Phaser.Math.Between(800, 1500) - (this.gameSpeed - 280) * 0.8);
+    this.spawnTimer.delay = nextDelay;
 }
 
 function update(time, delta) {
     if (this.gameOver) return;
+    const dt = delta / 1000;
 
-    if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-        handleJump.call(this);
-    }
+    if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) handleJump.call(this);
 
-    // 1. Update Distance
-    this.score += delta * 0.01;
+    // Score & speed
+    this.score     += delta * 0.01;
+    this.gameSpeed += 0.04;
     this.scoreText.setText('DISTANCE: ' + Math.floor(this.score) + 'm');
 
-    // 2. Slow Difficulty Curve (Previous version was too fast)
-    this.gameSpeed += 0.05; 
-
-    // 3. Obstacle Management
-    this.obstacles.children.iterate((child) => {
-        if (child) {
-            child.body.setVelocityX(-this.gameSpeed);
-            if (child.x < -50) {
-                child.destroy();
-            }
-        }
+    // Update obstacle velocities & clean up
+    this.obstacles.children.iterate(obs => {
+        if (!obs) return;
+        obs.body.setVelocityX(-this.gameSpeed);
+        if (obs.x < -80) obs.destroy();
     });
 
-    // 4. Create Ghost Trail
-    if (time % 100 < 20) {
-        let trail = this.add.rectangle(this.player.x, this.player.y, 30, 30, 0x00d2ff, 0.3);
-        this.tweens.add({
-            targets: trail,
-            alpha: 0,
-            x: this.player.x - 50,
-            duration: 200,
-            onComplete: () => trail.destroy()
-        });
+    // Parallax stars
+    this.bgStars.forEach(star => {
+        star.x -= star.scrollFactor * this.gameSpeed * dt * 0.3;
+        if (star.x < 0) star.x = W + 5;
+    });
+
+    // Ghost trail
+    this.trailTimer += delta;
+    if (this.trailTimer > 60) {
+        this.trailTimer = 0;
+        const trail = this.add.rectangle(
+            this.player.x - 5, this.player.y,
+            PLAYER_SIZE * 0.8, PLAYER_SIZE * 0.8,
+            0x00d2ff, 0.35
+        ).setDepth(8);
+        this.tweens.add({ targets: trail, alpha: 0, x: trail.x - 30, duration: 220, onComplete: () => trail.destroy() });
     }
+
+    // Player tilt based on vertical velocity
+    const vy = this.player.body.velocity.y;
+    this.player.angle = Phaser.Math.Clamp(vy * 0.02, -20, 20);
 }
 
-function hitObstacle() {
+function triggerGameOver() {
     if (this.gameOver) return;
     this.gameOver = true;
-    
     this.physics.pause();
-    this.cameras.main.shake(200, 0.02);
-    this.player.setFillStyle(0xffffff);
+    this.cameras.main.shake(220, 0.022);
+    this.player.setFillStyle(0xff0055);
 
-    this.add.text(400, 150, 'GAME OVER', { fontSize: '64px', fill: '#ff0055', fontWeight: 'bold' }).setOrigin(0.5);
-    this.add.text(400, 230, 'Final Distance: ' + Math.floor(this.score) + 'm', { fontSize: '24px', fill: '#fff' }).setOrigin(0.5);
-    this.add.text(400, 280, 'CLICK TO RESTART', { fontSize: '20px', fill: '#00d2ff' }).setOrigin(0.5);
-    
-    this.input.once('pointerdown', () => this.scene.restart());
+    const dist = Math.floor(this.score);
+    const prev = parseInt(localStorage.getItem('minedash_best') || 0);
+    if (dist > prev) localStorage.setItem('minedash_best', dist);
+
+    this.time.delayedCall(300, () => {
+        this.add.rectangle(W/2, H/2, 420, 230, 0x000000, 0.9).setDepth(40);
+        this.add.text(W/2, H/2 - 75, 'GAME OVER',                   { fontSize:'52px', fill:'#ff0055', fontFamily:'monospace', fontStyle:'bold' }).setOrigin(0.5).setDepth(41);
+        this.add.text(W/2, H/2 - 10, 'Distance: ' + dist + 'm',     { fontSize:'26px', fill:'#fff',    fontFamily:'monospace' }).setOrigin(0.5).setDepth(41);
+        this.add.text(W/2, H/2 + 40, 'Best: ' + Math.max(dist, prev) + 'm', { fontSize:'20px', fill:'#f1c40f', fontFamily:'monospace' }).setOrigin(0.5).setDepth(41);
+        this.add.text(W/2, H/2 + 88, 'CLICK / SPACE TO RESTART',    { fontSize:'17px', fill:'#00d2ff', fontFamily:'monospace' }).setOrigin(0.5).setDepth(41);
+        this.input.once('pointerdown', () => this.scene.restart());
+        this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
+    });
 }
 </script>
-
 </body>
 </html>

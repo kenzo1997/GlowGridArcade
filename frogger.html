@@ -3,128 +3,247 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phaser Deluxe Frogger</title>
+    <title>Frogger</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <style>
         body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #111; }
     </style>
 </head>
 <body>
-
 <script>
+const CELL = 50;
+const W = 500, H = 600;
+
+// Lane definitions: y center, type, speed (px/s), item width, color, spawn delay (ms)
+const LANES = [
+    { y: 525, type: 'car', speed:  170, w: 50,  color: 0xe74c3c, delay: 1400 },
+    { y: 475, type: 'car', speed: -110, w: 70,  color: 0xf1c40f, delay: 1800 },
+    { y: 425, type: 'car', speed:  200, w: 45,  color: 0x9b59b6, delay: 1200 },
+    { y: 375, type: 'car', speed: -140, w: 60,  color: 0xe67e22, delay: 1500 },
+    { y: 275, type: 'log', speed:  -90, w: 110, color: 0x6d4c1e, delay: 1700 },
+    { y: 225, type: 'log', speed:  120, w: 150, color: 0x795548, delay: 2000 },
+    { y: 175, type: 'log', speed: -100, w: 90,  color: 0x6d4c1e, delay: 1500 },
+    { y: 125, type: 'log', speed:   80, w: 130, color: 0x795548, delay: 2200 },
+];
+
 const config = {
     type: Phaser.AUTO,
-    width: 500,
-    height: 600,
+    width: W, height: H,
     physics: { default: 'arcade', arcade: { debug: false } },
-    scene: { create: create, update: update }
+    scene: { create, update }
 };
-
-const game = new Phaser.Game(config);
+new Phaser.Game(config);
 
 function create() {
-    // 1. Environment Layers
-    this.add.rectangle(250, 300, 500, 600, 0x000000); // Background
-    this.add.rectangle(250, 450, 500, 200, 0x333333); // Road
-    this.add.rectangle(250, 150, 500, 200, 0x0000ff, 0.5); // Water
-    this.add.rectangle(250, 575, 500, 50, 0x27ae60); // Start
-    this.add.rectangle(250, 25, 500, 50, 0x27ae60); // Goal
+    this.gameOver = false;
+    this.onLog    = false;
+    this.score    = 0;
+    this.lives    = 3;
+    this.bestY    = H - CELL;
+    this.moving   = false;
 
-    // 2. Groups
+    // Backgrounds
+    this.add.rectangle(W/2, H/2, W, H, 0x111111);
+    this.add.rectangle(W/2, H - 25, W, 50, 0x27ae60);   // start safe zone
+    this.add.rectangle(W/2, 50,     W, 100, 0x1a5c2a);  // goal zone
+    this.add.rectangle(W/2, 450,    W, 200, 0x222222);  // road
+    this.add.rectangle(W/2, 200,    W, 200, 0x0d2b45);  // water
+
+    // Road dashes
+    for (let x = 25; x < W; x += 65) {
+        this.add.rectangle(x, 400, 40, 5, 0x444444);
+    }
+    // Water shimmer
+    [130,160,200,230,260].forEach(y =>
+        this.add.rectangle(Phaser.Math.Between(20, W-20), y, Phaser.Math.Between(40,100), 3, 0x3a8fdb, 0.25)
+    );
+
+    this.add.text(W/2, H-25, 'S T A R T', { fontSize:'13px', fill:'#ffffffaa', letterSpacing:4 }).setOrigin(0.5);
+    this.add.text(W/2, 28,   '🏠  H O M E  🏠', { fontSize:'14px', fill:'#fff' }).setOrigin(0.5);
+
+    // Physics groups
     this.cars = this.physics.add.group();
     this.logs = this.physics.add.group();
 
-    // 3. The Frog
-    this.frog = this.add.circle(250, 575, 15, 0x2ecc71);
-    this.physics.add.existing(this.frog);
-    this.frog.body.setCollideWorldBounds(true);
-
-    // 4. Spawning Logic
-    const spawnRow = (y, group, color, speed, width) => {
+    // Spawn lanes - pre-populate screen immediately, then loop
+    LANES.forEach(lane => {
+        // Spawn 2-3 items already spread across the screen so it's not empty
+        const count = Phaser.Math.Between(2, 3);
+        for (let i = 0; i < count; i++) {
+            const frac = (i + 1) / (count + 1);
+            const preX = lane.speed > 0 ? frac * W : W - frac * W;
+            spawnItem.call(this, lane, preX);
+        }
+        // Keep spawning on a loop
         this.time.addEvent({
-            delay: Math.abs(200000 / speed),
-            callback: () => {
-                if (this.gameOver) return;
-                const x = speed > 0 ? -50 : 550;
-                const item = this.add.rectangle(x, y, width, 30, color);
-                group.add(item);
-                item.body.setVelocityX(speed);
-            },
+            delay: lane.delay,
+            callback: () => spawnItem.call(this, lane),
             loop: true
         });
-    };
+    });
 
-    // Rows of Obstacles
-    spawnRow(500, this.cars, 0xe74c3c, 150, 40);  // Car Fast
-    spawnRow(450, this.cars, 0xf1c40f, -100, 60); // Car Slow
-    spawnRow(400, this.cars, 0x9b59b6, 120, 40);  // Car Med
-    
-    spawnRow(250, this.logs, 0x8e44ad, -80, 100); // Log
-    spawnRow(150, this.logs, 0x8e44ad, 100, 150); // Log Long
-    spawnRow(50, this.logs, 0x8e44ad, -120, 80);  // Log Fast
+    // Frog
+    this.frog = this.add.rectangle(W/2, H - CELL/2, 34, 34, 0x2ecc71).setDepth(10);
+    this.physics.add.existing(this.frog);
+    this.frog.body.setAllowGravity(false);
+    this.frog.body.setCollideWorldBounds(true);
 
-    // 5. Controls
+    // UI
+    this.scoreText = this.add.text(8, H-90, 'SCORE: 0',  { fontSize:'17px', fill:'#fff', fontFamily:'monospace' }).setDepth(20);
+    this.livesText = this.add.text(8, H-65, '🐸 🐸 🐸', { fontSize:'17px' }).setDepth(20);
+    const savedBest = localStorage.getItem('frogger_best') || 0;
+    this.bestText  = this.add.text(W-8, H-90, 'BEST: '+savedBest, { fontSize:'15px', fill:'#f1c40f', fontFamily:'monospace' }).setOrigin(1,0).setDepth(20);
+
+    // Input
     this.cursors = this.input.keyboard.createCursorKeys();
-    this.input.on('pointerdown', () => moveFrog.call(this, 0, -50)); // Click to jump up
-
-    // 6. State
-    this.gameOver = false;
-    this.onLog = false;
+    this.wasd    = this.input.keyboard.addKeys({ up:'W', down:'S', left:'A', right:'D' });
 }
 
-function update() {
+// overrideX lets us pre-spawn items at specific positions on the screen
+function spawnItem(lane, overrideX) {
     if (this.gameOver) return;
+    const goRight = lane.speed > 0;
+    // If no override, spawn just off-screen on the incoming side
+    const startX = (overrideX !== undefined)
+        ? overrideX
+        : (goRight ? -lane.w / 2 - 10 : W + lane.w / 2 + 10);
 
-    // Movement (Snap Grid)
-    if (Phaser.Input.Keyboard.JustDown(this.cursors.up)) moveFrog.call(this, 0, -50);
-    if (Phaser.Input.Keyboard.JustDown(this.cursors.down)) moveFrog.call(this, 0, 50);
-    if (Phaser.Input.Keyboard.JustDown(this.cursors.left)) moveFrog.call(this, -50, 0);
-    if (Phaser.Input.Keyboard.JustDown(this.cursors.right)) moveFrog.call(this, 50, 0);
+    const group = lane.type === 'car' ? this.cars : this.logs;
 
-    // Win Condition
-    if (this.frog.y < 50) {
-        endGame.call(this, "YOU MADE IT!", 0x2ecc71);
+    const item = this.add.rectangle(startX, lane.y, lane.w, 34, lane.color);
+
+    // KEY FIX: add to the physics group FIRST, then configure the body.
+    // group.add() calls enableBody() internally which can reset velocity,
+    // so all body setup must happen after the add() call.
+    this.physics.add.existing(item);
+    group.add(item);
+    item.body.setAllowGravity(false);
+    item.body.setVelocityX(lane.speed);
+    item.laneSpeed = lane.speed;
+}
+
+function update(_, delta) {
+    if (this.gameOver) return;
+    const dt = delta / 1000;
+
+    // Keyboard input
+    if (!this.moving) {
+        const up    = Phaser.Input.Keyboard.JustDown(this.cursors.up)    || Phaser.Input.Keyboard.JustDown(this.wasd.up);
+        const down  = Phaser.Input.Keyboard.JustDown(this.cursors.down)  || Phaser.Input.Keyboard.JustDown(this.wasd.down);
+        const left  = Phaser.Input.Keyboard.JustDown(this.cursors.left)  || Phaser.Input.Keyboard.JustDown(this.wasd.left);
+        const right = Phaser.Input.Keyboard.JustDown(this.cursors.right) || Phaser.Input.Keyboard.JustDown(this.wasd.right);
+
+        if (up)    moveFrog.call(this,  0,    -CELL);
+        if (down)  moveFrog.call(this,  0,     CELL);
+        if (left)  moveFrog.call(this, -CELL,  0);
+        if (right) moveFrog.call(this,  CELL,  0);
     }
 
-    // Collision: Cars
-    this.physics.overlap(this.frog, this.cars, () => {
-        endGame.call(this, "SQUASHED!", 0xe74c3c);
-    });
+    // Forward-progress score
+    if (this.frog.y < this.bestY - 5) {
+        this.score  += 10;
+        this.bestY   = this.frog.y;
+        this.scoreText.setText('SCORE: ' + this.score);
+    }
 
-    // Collision: Water/Logs
+    // Win check
+    if (this.frog.y <= 58) { winRound.call(this); return; }
+
+    // Car collisions
+    let hitCar = false;
+    this.cars.children.iterate(car => {
+        if (!car || !car.active) return;
+        if (Phaser.Geom.Intersects.RectangleToRectangle(this.frog.getBounds(), car.getBounds())) hitCar = true;
+        if (car.x > W + 220 || car.x < -220) car.destroy();
+    });
+    if (hitCar) { loseLife.call(this, 'SQUASHED! 💥'); return; }
+
+    // Log riding
     this.onLog = false;
-    this.physics.overlap(this.frog, this.logs, (f, log) => {
-        this.onLog = true;
-        this.frog.x += log.body.velocity.x * 0.016; // Ride the log
+    let rideVel = 0;
+    this.logs.children.iterate(log => {
+        if (!log || !log.active) return;
+        if (Phaser.Geom.Intersects.RectangleToRectangle(this.frog.getBounds(), log.getBounds())) {
+            this.onLog = true;
+            rideVel    = log.laneSpeed;
+        }
+        if (log.x > W + 270 || log.x < -270) log.destroy();
     });
 
-    if (this.frog.y < 300 && this.frog.y > 50 && !this.onLog) {
-        endGame.call(this, "DROWNED!", 0x3498db);
+    if (this.onLog) {
+        this.frog.x = Phaser.Math.Clamp(this.frog.x + rideVel * dt, 17, W - 17);
+    }
+
+    // Drown check — water zone is roughly y 75 to 315
+    const fy = this.frog.y;
+    if (fy < 315 && fy > 75 && !this.onLog && !this.moving) {
+        loseLife.call(this, 'DROWNED! 💧');
     }
 }
 
-function moveFrog(x, y) {
-    this.frog.x += x;
-    this.frog.y += y;
-    // Add a little scale "jump" effect
-    this.tweens.add({ targets: this.frog, scale: 1.5, duration: 50, yoyo: true });
+function moveFrog(dx, dy) {
+    if (this.moving) return;
+    this.moving = true;
+    const tx = Phaser.Math.Clamp(this.frog.x + dx, 17, W - 17);
+    const ty = Phaser.Math.Clamp(this.frog.y + dy, 25, H - 25);
+    this.tweens.add({
+        targets: this.frog, x: tx, y: ty,
+        duration: 110, ease: 'Quad.Out',
+        onComplete: () => { this.moving = false; }
+    });
+    this.tweens.add({ targets: this.frog, scaleY: 0.65, scaleX: 1.3, duration: 55, yoyo: true });
 }
 
-function endGame(msg, color) {
-    this.gameOver = true;
-    this.cars.setVelocityX(0);
-    this.logs.setVelocityX(0);
-    
-    this.add.text(250, 300, msg, { 
-        fontSize: '48px', fontWeight: '900', fill: '#fff', 
-        backgroundColor: '#000', padding: 20 
-    }).setOrigin(0.5);
+function loseLife(msg) {
+    if (this.gameOver) return;
+    this.lives--;
+    this.frog.setFillStyle(0xff3333);
+    this.cameras.main.shake(180, 0.012);
 
-    this.add.text(250, 380, "Click to Restart", { fontSize: '20px', fill: '#fff' }).setOrigin(0.5);
-    
+    const popup = this.add.text(W/2, H/2, msg, {
+        fontSize:'34px', fill:'#fff', backgroundColor:'#000000bb', padding:{x:18,y:10}
+    }).setOrigin(0.5).setDepth(30);
+
+    if (this.lives <= 0) { endGame.call(this); return; }
+
+    this.livesText.setText('🐸 '.repeat(this.lives).trim());
+    this.time.delayedCall(850, () => {
+        popup.destroy();
+        this.frog.x = W/2; this.frog.y = H - CELL/2;
+        this.frog.setFillStyle(0x2ecc71);
+        this.bestY  = H - CELL;
+        this.moving = false;
+    });
+}
+
+function winRound() {
+    if (this.gameOver) return;
+    this.score += 200;
+    this.scoreText.setText('SCORE: ' + this.score);
+    this.cameras.main.flash(350, 0, 220, 80);
+    const popup = this.add.text(W/2, H/2, '🏠  HOME! +200', {
+        fontSize:'34px', fill:'#2ecc71', backgroundColor:'#000000bb', padding:{x:18,y:10}
+    }).setOrigin(0.5).setDepth(30);
+    this.time.delayedCall(900, () => {
+        popup.destroy();
+        this.frog.x = W/2; this.frog.y = H - CELL/2;
+        this.bestY  = H - CELL;
+        this.moving = false;
+    });
+}
+
+function endGame() {
+    this.gameOver = true;
+    const prev = parseInt(localStorage.getItem('frogger_best') || 0);
+    if (this.score > prev) localStorage.setItem('frogger_best', this.score);
+
+    this.add.rectangle(W/2, H/2, 380, 240, 0x000000, 0.88).setDepth(40);
+    this.add.text(W/2, H/2 - 80, 'GAME OVER',           { fontSize:'44px', fill:'#e74c3c', fontFamily:'monospace' }).setOrigin(0.5).setDepth(41);
+    this.add.text(W/2, H/2 - 20, 'Score: ' + this.score, { fontSize:'26px', fill:'#fff' }).setOrigin(0.5).setDepth(41);
+    this.add.text(W/2, H/2 + 30, 'Best: '  + Math.max(this.score, prev), { fontSize:'20px', fill:'#f1c40f' }).setOrigin(0.5).setDepth(41);
+    this.add.text(W/2, H/2 + 85, 'CLICK TO RESTART',    { fontSize:'18px', fill:'#2ecc71' }).setOrigin(0.5).setDepth(41);
     this.input.once('pointerdown', () => this.scene.restart());
 }
 </script>
-
 </body>
 </html>

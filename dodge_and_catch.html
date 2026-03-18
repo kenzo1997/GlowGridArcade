@@ -3,138 +3,326 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neon Catch - Deluxe Arcade</title>
+    <title>Dodge & Catch</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <style>
-        body { 
-            display: flex; justify-content: center; align-items: center; 
-            height: 100vh; margin: 0; background: #000; overflow: hidden;
-        }
+        body { display:flex; justify-content:center; align-items:center; height:100vh; margin:0; background:#000; overflow:hidden; }
     </style>
 </head>
 <body>
-
 <script>
+const W = 450, H = 600;
+
+// Gem types: [colour, points, size, label]
+const GEMS = [
+    { color: 0x00ffcc, points: 10,  size: 20, name: 'common'  },
+    { color: 0x00aaff, points: 25,  size: 18, name: 'rare'    },
+    { color: 0xff00ff, points: 50,  size: 16, name: 'epic'    },
+    { color: 0xffd700, points: 100, size: 14, name: 'legend'  },
+];
+// Gem spawn weights (higher = more common)
+const GEM_WEIGHTS = [60, 25, 12, 3];
+
 const config = {
     type: Phaser.AUTO,
-    width: 450,
-    height: 600,
-    physics: {
-        default: 'arcade',
-        arcade: { gravity: { y: 300 }, debug: false }
-    },
-    scene: { create: create, update: update }
+    width: W, height: H,
+    physics: { default: 'arcade', arcade: { gravity: { y: 260 }, debug: false } },
+    scene: { create, update }
 };
-
-const game = new Phaser.Game(config);
+new Phaser.Game(config);
 
 function create() {
-    // 1. Background & UI
-    this.add.graphics().fillGradientStyle(0x1a2a6c, 0x1a2a6c, 0xb21f1f, 0xfdbb2d, 1).fillRect(0, 0, 450, 600);
-    
-    this.score = 0;
-    this.gameOver = false;
-    
-    this.scoreText = this.add.text(20, 20, 'SCORE: 0', { 
-        fontSize: '32px', fill: '#fff', fontWeight: 'bold', fontFamily: 'Arial Black' 
-    });
+    this.score     = 0;
+    this.lives     = 3;
+    this.level     = 1;
+    this.gemsCaught = 0;   // gems caught this level
+    this.gemsPerLevel = 10; // gems needed to level up
+    this.gameOver  = false;
+    this.invincible = false; // brief invincibility after bomb hit
 
-    // 2. The Player (The Catcher)
-    this.player = this.add.rectangle(225, 550, 80, 20, 0x00d2ff);
+    // ── Background ──
+    const bg = this.add.graphics();
+    bg.fillGradientStyle(0x0a0a1a, 0x0a0a1a, 0x0d1a2e, 0x1a0a2e, 1);
+    bg.fillRect(0, 0, W, H);
+
+    // Subtle star field
+    for (let i = 0; i < 60; i++) {
+        const alpha = Phaser.Math.FloatBetween(0.1, 0.5);
+        this.add.rectangle(
+            Phaser.Math.Between(0, W), Phaser.Math.Between(0, H),
+            Phaser.Math.Between(1, 2), Phaser.Math.Between(1, 2),
+            0xffffff, alpha
+        );
+    }
+
+    // ── Player paddle ──
+    this.player = this.add.rectangle(W/2, H - 45, 90, 18, 0x00d2ff).setDepth(5);
     this.physics.add.existing(this.player);
     this.player.body.setAllowGravity(false);
     this.player.body.setImmovable(true);
     this.player.body.setCollideWorldBounds(true);
 
-    // 3. Falling Items Groups
-    this.items = this.physics.add.group();
+    // Paddle glow line
+    this.paddleGlow = this.add.rectangle(W/2, H - 45, 90, 4, 0x00d2ff, 0.4).setDepth(4);
 
-    // 4. Spawning Logic
+    // ── Groups ──
+    this.gems  = this.physics.add.group();
+    this.bombs = this.physics.add.group();
+
+    // ── Spawn timer ──
     this.spawnTimer = this.time.addEvent({
-        delay: 800,
-        callback: spawnItem,
-        callbackScope: this,
-        loop: true
+        delay: 850, callback: spawnItem, callbackScope: this, loop: true
     });
 
-    // 5. Collision Handling
-    this.physics.add.overlap(this.player, this.items, (player, item) => {
-        if (item.type === 'bomb') {
-            endGame.call(this);
-        } else {
-            collectItem.call(this, item);
-        }
-    });
+    // ── UI ──
+    this.scoreText = this.add.text(16, 16, 'SCORE: 0', {
+        fontSize: '26px', fill: '#fff', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setDepth(10);
 
-    // 6. Controls (Mouse/Touch)
-    this.input.on('pointermove', (pointer) => {
+    this.levelText = this.add.text(W/2, 16, 'LEVEL 1', {
+        fontSize: '18px', fill: '#00d2ff', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5, 0).setDepth(10);
+
+    const best = localStorage.getItem('dc_best') || 0;
+    this.bestText = this.add.text(W - 16, 16, 'BEST: ' + best, {
+        fontSize: '16px', fill: '#f1c40f', fontFamily: 'monospace'
+    }).setOrigin(1, 0).setDepth(10);
+
+    // Lives display
+    this.livesText = this.add.text(16, H - 28, '❤️ ❤️ ❤️', {
+        fontSize: '18px'
+    }).setDepth(10);
+
+    // Level progress bar (thin line under score)
+    this.progressBg  = this.add.rectangle(W/2, 50, W - 32, 5, 0x1a2a3a).setDepth(9);
+    this.progressBar = this.add.rectangle(16, 50, 1, 5, 0x00d2ff).setOrigin(0, 0.5).setDepth(10);
+
+    // ── Hint text ──
+    this.hintText = this.add.text(W/2, H/2 + 20, 'Move your mouse to catch gems!\nAvoid the 💣 bombs!', {
+        fontSize: '16px', fill: '#ffffff88', fontFamily: 'monospace', align: 'center'
+    }).setOrigin(0.5).setDepth(10);
+    this.time.delayedCall(2500, () => { if (this.hintText) this.hintText.destroy(); });
+
+    // ── Overlaps ──
+    this.physics.add.overlap(this.player, this.gems,  (pl, gem)  => catchGem.call(this, gem));
+    this.physics.add.overlap(this.player, this.bombs, (pl, bomb) => hitBomb.call(this, bomb));
+
+    // ── Input ──
+    this.input.on('pointermove', ptr => {
         if (!this.gameOver) {
-            this.player.x = Phaser.Math.Clamp(pointer.x, 40, 410);
+            this.player.x    = Phaser.Math.Clamp(ptr.x, 45, W - 45);
+            this.paddleGlow.x = this.player.x;
         }
     });
 }
 
+// ── Spawn ──────────────────────────────────────
 function spawnItem() {
     if (this.gameOver) return;
 
-    const x = Phaser.Math.Between(30, 420);
-    const isBomb = Math.random() < 0.25; // 25% chance for a bomb
-    
-    let item;
+    const x       = Phaser.Math.Between(20, W - 20);
+    const isBomb  = Math.random() < (0.18 + this.level * 0.018); // more bombs each level
+    const gravity = 260 + this.level * 28;
+
     if (isBomb) {
-        // Create a Bomb
-        item = this.add.circle(x, -20, 15, 0xff4b2b);
-        item.type = 'bomb';
-        // Add a "wick" to the bomb
-        const wick = this.add.rectangle(x, -35, 4, 10, 0xffffff);
-        this.items.add(item);
+        spawnBomb.call(this, x, gravity);
     } else {
-        // Create a Diamond
-        item = this.add.star(x, -20, 5, 12, 22, 0x00ffcc);
-        item.type = 'point';
-        this.items.add(item);
+        spawnGem.call(this, x, gravity);
     }
 }
 
-function collectItem(item) {
-    this.score += 10;
-    this.scoreText.setText('SCORE: ' + this.score);
-    
-    // Pulse effect on text
-    this.tweens.add({ targets: this.scoreText, scale: 1.1, duration: 50, yoyo: true });
-
-    // Speed up spawning as score increases
-    if (this.score % 100 === 0 && this.spawnTimer.delay > 300) {
-        this.spawnTimer.delay -= 50;
+function spawnGem(x, gravity) {
+    // Weighted random gem type
+    const roll   = Phaser.Math.Between(1, 100);
+    let cumul = 0, gemDef = GEMS[0];
+    for (let i = 0; i < GEMS.length; i++) {
+        cumul += GEM_WEIGHTS[i];
+        if (roll <= cumul) { gemDef = GEMS[i]; break; }
     }
 
-    item.destroy();
+    const gem = this.add.star(x, -20, 5, gemDef.size * 0.5, gemDef.size, gemDef.color).setDepth(3);
+    gem.gemDef = gemDef;
+
+    // KEY FIX: add to group FIRST, then configure body
+    this.physics.add.existing(gem);
+    this.gems.add(gem);
+    gem.body.setAllowGravity(true);
+    gem.body.setGravityY(gravity);
+
+    // Spin the gem
+    this.tweens.add({ targets: gem, angle: 360, duration: Phaser.Math.Between(800, 1600), repeat: -1, ease: 'Linear' });
 }
 
-function update() {
-    // Clean up items that fall off screen
-    this.items.children.iterate((item) => {
-        if (item && item.y > 650) {
-            item.destroy();
+function spawnBomb(x, gravity) {
+    const bomb = this.add.circle(x, -24, 16, 0xff3333).setDepth(3);
+    bomb.isBomb = true;
+
+    // Wick
+    const wick = this.add.rectangle(x, -40, 3, 14, 0xffaa00).setDepth(3);
+    bomb.wick  = wick;
+
+    // Warning flash before it gets near the paddle
+    this.time.delayedCall(1200, () => {
+        if (bomb && bomb.active) {
+            this.tweens.add({ targets: bomb, alpha: 0.3, duration: 120, yoyo: true, repeat: 4 });
+        }
+    });
+
+    // KEY FIX: add to group FIRST, then configure body
+    this.physics.add.existing(bomb);
+    this.bombs.add(bomb);
+    bomb.body.setAllowGravity(true);
+    bomb.body.setGravityY(gravity);
+}
+
+// ── Catch gem ─────────────────────────────────
+function catchGem(gem) {
+    const def = gem.gemDef;
+    this.score += def.points * this.level;
+    this.gemsCaught++;
+
+    // Floating score popup
+    const popup = this.add.text(gem.x, gem.y, '+' + (def.points * this.level), {
+        fontSize: '18px', fill: '#' + def.color.toString(16).padStart(6,'0'),
+        fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(8);
+    this.tweens.add({ targets: popup, y: gem.y - 50, alpha: 0, duration: 700, onComplete: () => popup.destroy() });
+
+    // Particle burst
+    for (let i = 0; i < 6; i++) {
+        const p = this.add.circle(gem.x, gem.y, Phaser.Math.Between(3,7), def.color, 0.9).setDepth(7);
+        const angle = (i / 6) * Math.PI * 2;
+        this.tweens.add({
+            targets: p,
+            x: gem.x + Math.cos(angle) * Phaser.Math.Between(20, 50),
+            y: gem.y + Math.sin(angle) * Phaser.Math.Between(20, 50),
+            alpha: 0, scale: 0,
+            duration: Phaser.Math.Between(300, 600),
+            onComplete: () => p.destroy()
+        });
+    }
+
+    // Paddle flash
+    this.player.setFillStyle(def.color);
+    this.time.delayedCall(120, () => this.player.setFillStyle(0x00d2ff));
+
+    gem.destroy();
+    updateUI.call(this);
+    checkLevelUp.call(this);
+}
+
+// ── Hit bomb ──────────────────────────────────
+function hitBomb(bomb) {
+    if (this.invincible) return;
+    this.invincible = true;
+
+    if (bomb.wick) bomb.wick.destroy();
+    bomb.destroy();
+
+    this.lives--;
+    this.cameras.main.shake(250, 0.02);
+    this.cameras.main.flash(200, 255, 50, 50);
+
+    updateUI.call(this);
+
+    if (this.lives <= 0) {
+        endGame.call(this);
+        return;
+    }
+
+    // Blink player during invincibility window
+    this.tweens.add({ targets: this.player, alpha: 0.3, duration: 100, yoyo: true, repeat: 8,
+        onComplete: () => {
+            this.player.setAlpha(1);
+            this.invincible = false;
         }
     });
 }
 
+// ── Level up ──────────────────────────────────
+function checkLevelUp() {
+    if (this.gemsCaught >= this.gemsPerLevel) {
+        this.gemsCaught = 0;
+        this.level++;
+
+        // Faster spawning
+        this.spawnTimer.delay = Math.max(320, 850 - this.level * 55);
+
+        // Level up flash
+        this.cameras.main.flash(400, 0, 210, 255);
+        const msg = this.add.text(W/2, H/2, 'LEVEL ' + this.level + '!', {
+            fontSize: '48px', fill: '#00d2ff', fontFamily: 'monospace', fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(20);
+        this.tweens.add({ targets: msg, scale: 1.4, alpha: 0, duration: 900, ease: 'Power2', onComplete: () => msg.destroy() });
+    }
+}
+
+// ── Update ────────────────────────────────────
+function update() {
+    if (this.gameOver) return;
+
+    // Sync wick positions with bombs & clean up off-screen
+    this.bombs.children.iterate(bomb => {
+        if (!bomb) return;
+        if (bomb.wick) { bomb.wick.x = bomb.x; bomb.wick.y = bomb.y - 20; }
+        if (bomb.y > H + 40) { if (bomb.wick) bomb.wick.destroy(); bomb.destroy(); }
+    });
+    this.gems.children.iterate(gem => {
+        if (gem && gem.y > H + 40) gem.destroy();
+    });
+}
+
+// ── UI ────────────────────────────────────────
+function updateUI() {
+    this.scoreText.setText('SCORE: ' + this.score.toLocaleString());
+    this.tweens.add({ targets: this.scoreText, scale: 1.08, duration: 60, yoyo: true });
+
+    this.levelText.setText('LEVEL ' + this.level);
+
+    const livesIcons = ['', '❤️', '❤️ ❤️', '❤️ ❤️ ❤️'];
+    this.livesText.setText(livesIcons[Math.max(0, this.lives)] || '');
+
+    // Progress bar
+    const progress = this.gemsCaught / this.gemsPerLevel;
+    const barW     = (W - 32) * progress;
+    this.progressBar.width = Math.max(1, barW);
+}
+
+// ── Game over ─────────────────────────────────
 function endGame() {
     this.gameOver = true;
     this.physics.pause();
-    this.cameras.main.shake(300, 0.05); // Arcade "Impact" feel
-    
+
+    // Save best
+    const prev = parseInt(localStorage.getItem('dc_best') || 0);
+    if (this.score > prev) {
+        localStorage.setItem('dc_best', this.score);
+        this.bestText.setText('BEST: ' + this.score.toLocaleString());
+    }
+
     this.player.setFillStyle(0xff0000);
 
-    const bg = this.add.rectangle(225, 300, 300, 200, 0x000000, 0.8);
-    this.add.text(225, 270, 'GAME OVER', { fontSize: '40px', fill: '#ff0000', fontWeight: 'bold' }).setOrigin(0.5);
-    this.add.text(225, 330, 'FINAL SCORE: ' + this.score, { fontSize: '20px', fill: '#fff' }).setOrigin(0.5);
-    this.add.text(225, 370, 'CLICK TO REPLAY', { fontSize: '16px', fill: '#00ffcc' }).setOrigin(0.5);
+    const panel = this.add.rectangle(W/2, H/2, 320, 240, 0x000000, 0.92)
+        .setStrokeStyle(2, 0xff3333, 0.8).setDepth(20);
+    this.add.text(W/2, H/2 - 85, 'GAME OVER', {
+        fontSize: '38px', fill: '#ff3333', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(21);
+    this.add.text(W/2, H/2 - 30, 'Score: ' + this.score.toLocaleString(), {
+        fontSize: '22px', fill: '#fff', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(21);
+    this.add.text(W/2, H/2 + 15, 'Level: ' + this.level + '   Best: ' + Math.max(this.score, prev).toLocaleString(), {
+        fontSize: '15px', fill: '#f1c40f', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(21);
 
-    this.input.once('pointerdown', () => this.scene.restart());
+    const btn = this.add.rectangle(W/2, H/2 + 75, 200, 42, 0xffffff, 0.08)
+        .setStrokeStyle(2, 0x00d2ff, 0.8).setDepth(21).setInteractive({ useHandCursor: true });
+    this.add.text(W/2, H/2 + 75, 'PLAY AGAIN', {
+        fontSize: '18px', fill: '#fff', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(22);
+    btn.on('pointerdown', () => this.scene.restart());
+    btn.on('pointermove', () => btn.setFillStyle(0xffffff, 0.2));
+    btn.on('pointerout',  () => btn.setFillStyle(0xffffff, 0.08));
 }
 </script>
-
 </body>
 </html>

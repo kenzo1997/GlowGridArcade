@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Space Invaders</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #000; }
+    </style>
+</head>
+<body>
+<script>
+// ─── Constants ───────────────────────────────
+const W = 600;
+const H = 700;
+const INVADER_ROWS = 5;
+const INVADER_COLS = 11;
+const INVADER_SIZE = 32;
+const PLAYER_SIZE = 40;
+const BULLET_SIZE = 4;
+const SHIELD_WIDTH = 60;
+const SHIELD_HEIGHT = 24;
+
+// Scoring (based on original Space Invaders)
+const SCORES = {
+    top: 30,
+    middle: 20,
+    bottom: 10,
+    saucer: 300
+};
+
+// Colors matching GlowGrid neon palette
+const COLORS = {
+    player: 0x00d2ff,    // neon blue
+    bullet: 0xff0055,     // neon pink
+    shield: 0x00ff88,     // neon green
+    invader1: 0xe67e22,   // orange
+    invader2: 0x9b59b6,   // purple
+    invader3: 0xf1c40f,   // gold
+    ui: 0xf1c40f          // gold for scoring
+};
+
+const config = {
+    type: Phaser.AUTO,
+    width: W, height: H,
+    backgroundColor: '#050505',
+    physics: { default: 'arcade', arcade: { debug: false } },
+    scene: { create, update }
+};
+new Phaser.Game(config);
+
+function create() {
+    this.gameOver = false;
+    this.score = 0;
+    this.lives = 3;
+    this.level = 1;
+    this.waveComplete = false;
+
+    // Game state
+    this.invaders = this.physics.add.group();
+    this.playerBullets = this.physics.add.group();
+    this.invaderBullets = this.physics.add.group();
+    this.shields = this.physics.add.group({ immovable: true });
+
+    // Create backgrounds
+    this.add.rectangle(W/2, H/2, W, H, 0x050505);
+
+    // Draw stars background
+    drawStars.call(this);
+
+    // Create player
+    this.player = this.add.rectangle(W/2, H - 50, PLAYER_SIZE, 20, COLORS.player)
+        .setOrigin(0.5);
+    this.physics.add.existing(this.player);
+    this.player.body.setImmovable(true);
+
+    // Create invaders
+    createInvaders.call(this);
+
+    // Create shields
+    createShields.call(this);
+
+    // UI Elements
+    this.scoreText = this.add.text(20, 20, 'SCORE: 0', {
+        fontSize: '18px', fill: '#fff', fontFamily: 'monospace'
+    });
+
+    this.levelText = this.add.text(W/2, 20, 'WAVE ' + this.level, {
+        fontSize: '18px', fill: COLORS.ui, fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    this.livesText = this.add.text(W - 80, 20, 'LIVES: ' + this.lives, {
+        fontSize: '18px', fill: '#fff', fontFamily: 'monospace'
+    }).setOrigin(1, 0);
+
+    // High score display
+    const bestScore = localStorage.getItem('spaceinvaders_best') || '0';
+    this.bestText = this.add.text(W/2, H - 20, 'BEST: ' + bestScore, {
+        fontSize: '14px', fill: COLORS.ui, fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    // Controls
+    this.cursors = this.input.keyboard.createCursorKeys();
+    this.spacebar = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+    // Collision detection
+    this.physics.add.overlap(this.playerBullets, this.invaders, hitInvader, null, this);
+    this.physics.add.overlap(this.playerBullets, this.shields, hitShield, null, this);
+    this.physics.add.overlap(this.invaderBullets, this.player, hitPlayer, null, this);
+    this.physics.add.overlap(this.invaderBullets, this.shields, hitShield, null, this);
+
+    // Invader shooting timer
+    this.shootTimer = 0;
+    this.shootInterval = 2000; // ms between shots
+
+    // Game over text (hidden initially)
+    this.gameOverText = this.add.text(W/2, H/2, '', {
+        fontSize: '32px', fill: '#ff0055', fontFamily: 'monospace'
+    }).setOrigin(0.5).setVisible(false);
+}
+
+function update(time, delta) {
+    if (this.gameOver) return;
+
+    // Player movement
+    if (this.cursors.left.isDown) {
+        this.player.x = Phaser.Math.Clamp(this.player.x - 300 * delta/1000, PLAYER_SIZE/2, W - PLAYER_SIZE/2);
+    }
+    if (this.cursors.right.isDown) {
+        this.player.x = Phaser.Math.Clamp(this.player.x + 300 * delta/1000, PLAYER_SIZE/2, W - PLAYER_SIZE/2);
+    }
+
+    // Player shooting
+    if (Phaser.Input.Keyboard.JustDown(this.spacebar) && this.playerBullets.countActive() < 2) {
+        const bullet = this.add.rectangle(this.player.x, this.player.y - 20, BULLET_SIZE, BULLET_SIZE, COLORS.bullet);
+        this.physics.add.existing(bullet);
+        bullet.body.setVelocity(0, -500);
+        bullet.body.setBounce(0, 0);
+        bullet.body.setCollideWorldBounds(false);
+        this.playerBullets.add(bullet);
+    }
+
+    // Invader shooting logic
+    this.shootTimer += delta;
+    if (this.shootTimer > this.shootInterval && this.invaders.countActive() > 0) {
+        shootInvader.call(this);
+        this.shootTimer = 0;
+        // Speed up shooting based on remaining invaders
+        this.shootInterval = Math.max(500, 2000 - (55 - this.invaders.countActive()) * 30);
+    }
+
+    // Update invaders movement if wave complete
+    if (!this.waveComplete) {
+        updateInvaders.call(this, delta);
+    }
+
+    // Check if wave is complete
+    if (this.invaders.countActive() === 0 && !this.waveComplete) {
+        waveComplete.call(this);
+    }
+
+    // Clean up bullets that go off screen
+    this.playerBullets.getChildren().forEach(bullet => {
+        if (bullet.y < -50 || bullet.y > H + 50) {
+            bullet.destroy();
+        }
+    });
+    this.invaderBullets.getChildren().forEach(bullet => {
+        if (bullet.y < -50 || bullet.y > H + 50) {
+            bullet.destroy();
+        }
+    });
+}
+
+// ─── Invader Functions ─────────────────────────
+
+function createInvaders() {
+    const startY = 100;
+    const spacing = 8;
+
+    for (let row = 0; row < INVADER_ROWS; row++) {
+        const scoreValue = row === 0 ? SCORES.bottom : (row === 2 ? SCORES.middle : SCORES.top);
+        const color = row === 0 ? COLORS.invader1 : (row === 2 ? COLORS.invader2 : COLORS.invader3);
+
+        for (let col = 0; col < INVADER_COLS; col++) {
+            const x = 50 + col * (INVADER_SIZE + spacing);
+            const y = startY + row * (INVADER_SIZE + spacing);
+
+            const invader = this.add.rectangle(x, y, INVADER_SIZE, INVADER_SIZE, color);
+            this.physics.add.existing(invader);
+            invader.score = scoreValue;
+            this.invaders.add(invader);
+
+            // Draw invader shape
+            const gfx = this.add.graphics();
+            gfx.fillStyle(color);
+            gfx.fillRect(x - INVADER_SIZE/2 + 4, y - INVADER_SIZE/2 + 4, INVADER_SIZE - 8, INVADER_SIZE - 8);
+            gfx.fillRect(x - INVADER_SIZE/2 + 8, y - INVADER_SIZE/2 + 12, INVADER_SIZE - 16, 8);
+        }
+    }
+
+    this.invaderDirection = 1;
+    this.invaderX = 0;
+    this.invaderSpeed = 30;
+    this.dropDown = false;
+}
+
+function updateInvaders(delta) {
+    this.invaderX += this.invaderDirection * this.invaderSpeed * delta / 1000;
+
+    // Move invaders
+    this.invaders.getChildren().forEach(invader => {
+        invader.x += this.invaderDirection * this.invaderSpeed * delta / 1000;
+    });
+
+    // Check boundaries
+    let edgeHit = false;
+    this.invaders.getChildren().forEach(invader => {
+        if (!edgeHit && (invader.x < INVADER_SIZE/2 + 10 || invader.x > W - INVADER_SIZE/2 - 10)) {
+            edgeHit = true;
+        }
+    });
+
+    if (edgeHit && !this.dropDown) {
+        this.invaderDirection *= -1;
+        this.dropDown = true;
+
+        // Move invaders down
+        this.invaders.getChildren().forEach(invader => {
+            invader.y += 20;
+            // Check if invaders reached player
+            if (invader.y > H - 100) {
+                gameOver.call(this, false);
+            }
+        });
+
+        // Increase speed slightly each time they hit edge
+        this.invaderSpeed *= 1.05;
+    } else if (!edgeHit) {
+        this.dropDown = false;
+    }
+}
+
+function shootInvader() {
+    if (this.invaders.countActive() === 0) return;
+
+    // Choose random active invader to shoot
+    const aliveInvaders = this.invaders.getChildren().filter(invader => invader.active);
+    if (aliveInvaders.length === 0) return;
+
+    const shooter = Phaser.Utils.Array.GetRandom(aliveInvaders);
+    const bullet = this.add.rectangle(shooter.x, shooter.y + INVADER_SIZE/2, BULLET_SIZE, BULLET_SIZE, 0xf1c40f);
+    this.physics.add.existing(bullet);
+    bullet.body.setVelocity(0, 200);
+    bullet.body.setBounce(0, 0);
+    bullet.body.setCollideWorldBounds(false);
+    this.invaderBullets.add(bullet);
+}
+
+// ─── Shield Functions ─────────────────────────
+
+function createShields() {
+    const shieldY = H - 150;
+    const positions = [100, 225, 375, 500];
+
+    positions.forEach(x => {
+        const shield = this.add.rectangle(x, shieldY, SHIELD_WIDTH, SHIELD_HEIGHT, COLORS.shield);
+        this.physics.add.existing(shield);
+        shield.body.setImmovable(true);
+        shield.hits = 0;
+        shield.maxHits = 5;
+        shield.alpha = 0.7;
+        this.shields.add(shield);
+
+        // Shield border
+        const border = this.add.graphics();
+        border.fillStyle(COLORS.shield, 0.3);
+        border.lineStyle(2, COLORS.shield, 1);
+        border.strokeRect(x - SHIELD_WIDTH/2 + 2, shieldY - SHIELD_HEIGHT/2 + 2, SHIELD_WIDTH - 4, SHIELD_HEIGHT - 4);
+    });
+}
+
+// ─── Collision Handlers ──────────────────────
+
+function hitInvader(bullet, invader) {
+    bullet.destroy();
+    invader.destroy();
+
+    // Update score
+    this.score += invader.score;
+    this.scoreText.setText('SCORE: ' + this.score);
+
+    // Check high score
+    const prevBest = parseInt(localStorage.getItem('spaceinvaders_best') || 0);
+    if (this.score > prevBest) {
+        localStorage.setItem('spaceinvaders_best', this.score);
+        this.bestText.setText('BEST: ' + this.score);
+    }
+}
+
+function hitPlayer(bullet, player) {
+    bullet.destroy();
+    this.lives--;
+    this.livesText.setText('LIVES: ' + this.lives);
+
+    if (this.lives <= 0) {
+        gameOver.call(this, false);
+    }
+}
+
+function hitShield(bullet, shield) {
+    bullet.destroy();
+    shield.hits++;
+
+    // Update shield appearance based on damage
+    const damageRatio = shield.hits / shield.maxHits;
+    if (damageRatio > 0.8) {
+        shield.alpha = 0.2;
+    } else if (damageRatio > 0.6) {
+        shield.alpha = 0.4;
+    } else if (damageRatio > 0.4) {
+        shield.alpha = 0.6;
+    }
+
+    if (shield.hits >= shield.maxHits) {
+        shield.destroy();
+    }
+}
+
+// ─── Game Flow ──────────────────────────────
+
+function waveComplete() {
+    this.waveComplete = true;
+    this.level++;
+    this.levelText.setText('WAVE ' + this.level);
+
+    // Bonus for completing wave
+    this.score += 100 * this.level;
+    this.scoreText.setText('SCORE: ' + this.score);
+
+    // Reset for next wave
+    this.time.delayedCall(1500, () => {
+        this.waveComplete = false;
+        createInvaders.call(this);
+        this.invaderSpeed = 30 + (this.level - 1) * 5;
+    });
+}
+
+function gameOver(won) {
+    this.gameOver = true;
+
+    const message = won ? 'VICTORY!' : 'GAME OVER';
+    this.gameOverText.setText(message).setVisible(true);
+
+    this.scoreText.setFill('#ff0055');
+    this.levelText.setFill('#ff0055');
+    this.livesText.setFill('#ff0055');
+
+    // Restart on spacebar press
+    this.input.keyboard.once('keydown-SPACE', () => {
+        this.scene.restart();
+    });
+}
+
+function drawStars() {
+    const gfx = this.add.graphics();
+    for (let i = 0; i < 50; i++) {
+        const x = Phaser.Math.Between(0, W);
+        const y = Phaser.Math.Between(0, H);
+        const size = Phaser.Math.Between(1, 3);
+        const brightness = Phaser.Math.Between(50, 200);
+        gfx.fillStyle(brightness);
+        gfx.fillRect(x, y, size, size);
+    }
+}
+</script>
+</body>
+</html>

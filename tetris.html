@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tetris</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { display:flex; justify-content:center; align-items:center; height:100vh; margin:0; background:#000; }
+    </style>
+</head>
+<body>
+<script>
+// ─── Constants ───────────────────────────────
+const COLS     = 10;
+const ROWS     = 20;
+const CELL     = 30;
+const BW       = COLS * CELL;          // board width  300
+const BH       = ROWS * CELL;          // board height 600
+const SIDE     = 140;                  // side panel width
+const W        = BW + SIDE * 2;       // total  580
+const H        = BH + 60;             // total  660
+const BX       = SIDE;                // board x offset
+const BY       = 30;                  // board y offset
+
+// Tetromino definitions — [shape matrix, colour]
+const PIECES = [
+    { shape: [[1,1,1,1]],                           color: 0x00f0f0 }, // I  cyan
+    { shape: [[1,1],[1,1]],                         color: 0xf0f000 }, // O  yellow
+    { shape: [[0,1,0],[1,1,1]],                     color: 0xa000f0 }, // T  purple
+    { shape: [[0,1,1],[1,1,0]],                     color: 0x00f000 }, // S  green
+    { shape: [[1,1,0],[0,1,1]],                     color: 0xf00000 }, // Z  red
+    { shape: [[1,0,0],[1,1,1]],                     color: 0x0000f0 }, // J  blue
+    { shape: [[0,0,1],[1,1,1]],                     color: 0xf0a000 }, // L  orange
+];
+
+// Scoring table per lines cleared
+const LINE_SCORES = [0, 100, 300, 500, 800];
+
+// Drop interval per level (ms)
+function levelInterval(lvl) { return Math.max(80, 800 - (lvl - 1) * 70); }
+
+const config = {
+    type: Phaser.AUTO,
+    width: W, height: H,
+    backgroundColor: '#080808',
+    scene: { create, update }
+};
+new Phaser.Game(config);
+
+// ─── Scene ───────────────────────────────────
+function create() {
+    this.board      = makeBoard();
+    this.score      = 0;
+    this.lines      = 0;
+    this.level      = 1;
+    this.gameOver   = false;
+    this.paused     = false;
+    this.holdPiece  = null;
+    this.holdUsed   = false;          // can only hold once per piece
+    this.bag        = [];             // 7-bag randomiser
+    this.nextQueue  = [];             // 3 lookahead
+    this.lockTimer  = 0;
+    this.lockDelay  = 500;           // ms before piece locks after landing
+    this.onGround   = false;
+    this.dropTimer  = 0;
+
+    // Fill next queue
+    for (let i = 0; i < 3; i++) this.nextQueue.push(drawFromBag.call(this));
+
+    // ── Graphics layers ──
+    this.bgGfx      = this.add.graphics().setDepth(0);
+    this.boardGfx   = this.add.graphics().setDepth(1);
+    this.ghostGfx   = this.add.graphics().setDepth(2);
+    this.pieceGfx   = this.add.graphics().setDepth(3);
+    this.uiGfx      = this.add.graphics().setDepth(4);
+
+    drawStaticUI.call(this);
+
+    // ── Text elements ──
+    const mono = { fontFamily: 'monospace' };
+    this.scoreVal  = this.add.text(W - SIDE + 10, BY + 60,  '0',      { ...mono, fontSize:'22px', fill:'#fff' }).setDepth(5);
+    this.linesVal  = this.add.text(W - SIDE + 10, BY + 130, '0',      { ...mono, fontSize:'22px', fill:'#fff' }).setDepth(5);
+    this.levelVal  = this.add.text(W - SIDE + 10, BY + 200, '1',      { ...mono, fontSize:'22px', fill:'#fff' }).setDepth(5);
+    this.bestVal   = this.add.text(W - SIDE + 10, BY + 270, localStorage.getItem('tetris_best') || '0', { ...mono, fontSize:'18px', fill:'#f1c40f' }).setDepth(5);
+
+    this.holdLabel  = this.add.text(14, BY + 10,  'HOLD',  { ...mono, fontSize:'13px', fill:'#ffffff66', letterSpacing:3 }).setDepth(5);
+    this.nextLabel  = this.add.text(W - SIDE + 10, BY + 310, 'NEXT', { ...mono, fontSize:'13px', fill:'#ffffff66', letterSpacing:3 }).setDepth(5);
+    this.pauseText  = this.add.text(BX + BW/2, BY + BH/2, 'PAUSED', { ...mono, fontSize:'36px', fill:'#fff', fontStyle:'bold' }).setOrigin(0.5).setDepth(10).setVisible(false);
+
+    // ── Controls hint ──
+    this.add.text(BX, BY + BH + 8, '← → move   ↑ rotate   ↓ soft drop   SPACE hard drop   C hold   P pause', {
+        fontFamily:'monospace', fontSize:'10px', fill:'#ffffff33'
+    }).setDepth(5);
+
+    // ── Input ──
+    this.cursors = this.input.keyboard.createCursorKeys();
+    this.keys    = this.input.keyboard.addKeys({
+        rotCW:  Phaser.Input.Keyboard.KeyCodes.UP,
+        rotCCW: Phaser.Input.Keyboard.KeyCodes.Z,
+        hold:   Phaser.Input.Keyboard.KeyCodes.C,
+        pause:  Phaser.Input.Keyboard.KeyCodes.P,
+        hard:   Phaser.Input.Keyboard.KeyCodes.SPACE,
+        left:   Phaser.Input.Keyboard.KeyCodes.LEFT,
+        right:  Phaser.Input.Keyboard.KeyCodes.RIGHT,
+        down:   Phaser.Input.Keyboard.KeyCodes.DOWN,
+    });
+
+    // Auto-repeat state
+    this.das = { left:0, right:0, down:0 };  // delayed auto shift timers
+
+    spawnPiece.call(this);
+}
+
+// ─── Update loop ─────────────────────────────
+function update(time, delta) {
+    if (this.gameOver || this.paused) return;
+
+    handleInput.call(this, delta);
+    handleGravity.call(this, delta);
+    redraw.call(this);
+}
+
+// ─── Input ───────────────────────────────────
+function handleInput(delta) {
+    const k = this.keys;
+
+    // Pause
+    if (Phaser.Input.Keyboard.JustDown(k.pause)) {
+        this.paused = true;
+        this.pauseText.setVisible(true);
+        this.input.keyboard.once('keydown-P', () => {
+            this.paused = false;
+            this.pauseText.setVisible(false);
+        });
+        return;
+    }
+
+    // Rotate
+    if (Phaser.Input.Keyboard.JustDown(k.rotCW))  rotatePiece.call(this, 1);
+    if (Phaser.Input.Keyboard.JustDown(k.rotCCW)) rotatePiece.call(this, -1);
+
+    // Hold
+    if (Phaser.Input.Keyboard.JustDown(k.hold)) doHold.call(this);
+
+    // Hard drop
+    if (Phaser.Input.Keyboard.JustDown(k.hard)) hardDrop.call(this);
+
+    // DAS — left/right/down with auto-repeat
+    const DAS_DELAY = 170, DAS_REPEAT = 50;
+
+    if (k.left.isDown) {
+        this.das.left += delta;
+        if (this.das.left === delta || this.das.left > DAS_DELAY) {  // first frame or held
+            if (this.das.left === delta || (this.das.left - delta) % DAS_REPEAT > this.das.left % DAS_REPEAT) {
+                movePiece.call(this, -1, 0);
+            }
+        }
+    } else { this.das.left = 0; }
+
+    if (k.right.isDown) {
+        this.das.right += delta;
+        if (this.das.right === delta || this.das.right > DAS_DELAY) {
+            if (this.das.right === delta || (this.das.right - delta) % DAS_REPEAT > this.das.right % DAS_REPEAT) {
+                movePiece.call(this, 1, 0);
+            }
+        }
+    } else { this.das.right = 0; }
+
+    if (k.down.isDown) {
+        this.das.down += delta;
+        if (this.das.down === delta || this.das.down > DAS_DELAY) {
+            if (this.das.down === delta || (this.das.down - delta) % DAS_REPEAT > this.das.down % DAS_REPEAT) {
+                if (movePiece.call(this, 0, 1)) this.score += 1;
+            }
+        }
+    } else { this.das.down = 0; }
+}
+
+// ─── Gravity ─────────────────────────────────
+function handleGravity(delta) {
+    this.dropTimer += delta;
+    const interval = levelInterval(this.level);
+
+    if (this.dropTimer >= interval) {
+        this.dropTimer = 0;
+        const moved = movePiece.call(this, 0, 1);
+        if (!moved) {
+            // Piece has landed — start lock delay
+            this.onGround = true;
+            this.lockTimer += delta;
+            if (this.lockTimer >= this.lockDelay) {
+                lockPiece.call(this);
+            }
+        } else {
+            this.onGround  = false;
+            this.lockTimer = 0;
+        }
+    } else if (this.onGround) {
+        this.lockTimer += delta;
+        if (this.lockTimer >= this.lockDelay) lockPiece.call(this);
+    }
+}
+
+// ─── Piece management ────────────────────────
+function spawnPiece() {
+    const def     = this.nextQueue.shift();
+    this.nextQueue.push(drawFromBag.call(this));
+
+    this.current = {
+        def,
+        shape: def.shape.map(r => [...r]),
+        x: Math.floor(COLS / 2) - Math.floor(def.shape[0].length / 2),
+        y: 0
+    };
+
+    this.onGround  = false;
+    this.lockTimer = 0;
+    this.holdUsed  = false;
+
+    // Game over if spawn position is blocked
+    if (!isValid.call(this, this.current.shape, this.current.x, this.current.y)) {
+        triggerGameOver.call(this);
+    }
+}
+
+function drawFromBag() {
+    if (this.bag.length === 0) {
+        // Refill with shuffled 7-bag
+        this.bag = [...Array(7).keys()];
+        for (let i = this.bag.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]];
+        }
+    }
+    return PIECES[this.bag.pop()];
+}
+
+function movePiece(dx, dy) {
+    const nx = this.current.x + dx;
+    const ny = this.current.y + dy;
+    if (isValid.call(this, this.current.shape, nx, ny)) {
+        this.current.x = nx;
+        this.current.y = ny;
+        if (dx !== 0) { this.onGround = false; this.lockTimer = 0; }
+        return true;
+    }
+    return false;
+}
+
+function rotatePiece(dir) {
+    const rotated = rotate(this.current.shape, dir);
+    // SRS wall kick tests
+    const kicks = getKicks(this.current.shape, rotated, dir);
+    for (const [kx, ky] of kicks) {
+        if (isValid.call(this, rotated, this.current.x + kx, this.current.y + ky)) {
+            this.current.shape = rotated;
+            this.current.x    += kx;
+            this.current.y    += ky;
+            this.onGround  = false;
+            this.lockTimer = 0;
+            return;
+        }
+    }
+}
+
+function hardDrop() {
+    let dropped = 0;
+    while (movePiece.call(this, 0, 1)) dropped++;
+    this.score += dropped * 2;
+    lockPiece.call(this);
+}
+
+function doHold() {
+    if (this.holdUsed) return;
+    this.holdUsed = true;
+    const cur = this.current.def;
+    if (this.holdPiece) {
+        // Swap
+        const prev      = this.holdPiece;
+        this.holdPiece  = cur;
+        this.current    = {
+            def:   prev,
+            shape: prev.shape.map(r => [...r]),
+            x:     Math.floor(COLS/2) - Math.floor(prev.shape[0].length/2),
+            y:     0
+        };
+    } else {
+        this.holdPiece = cur;
+        spawnPiece.call(this);
+    }
+    this.onGround  = false;
+    this.lockTimer = 0;
+}
+
+function lockPiece() {
+    const { shape, x, y } = this.current;
+    for (let r = 0; r < shape.length; r++) {
+        for (let c = 0; c < shape[r].length; c++) {
+            if (shape[r][c]) {
+                const br = y + r, bc = x + c;
+                if (br < 0) { triggerGameOver.call(this); return; }
+                this.board[br][bc] = this.current.def.color;
+            }
+        }
+    }
+    clearLines.call(this);
+    spawnPiece.call(this);
+}
+
+function clearLines() {
+    let cleared = 0;
+    for (let r = ROWS - 1; r >= 0; r--) {
+        if (this.board[r].every(c => c !== 0)) {
+            this.board.splice(r, 1);
+            this.board.unshift(Array(COLS).fill(0));
+            cleared++;
+            r++; // recheck same row index
+        }
+    }
+    if (cleared > 0) {
+        this.lines += cleared;
+        this.score += LINE_SCORES[cleared] * this.level;
+        this.level  = Math.floor(this.lines / 10) + 1;
+        updateUI.call(this);
+
+        // Flash effect
+        this.cameras.main.flash(120, 255, 255, 255, false);
+    }
+}
+
+// ─── Ghost piece ─────────────────────────────
+function getGhostY() {
+    let gy = this.current.y;
+    while (isValid.call(this, this.current.shape, this.current.x, gy + 1)) gy++;
+    return gy;
+}
+
+// ─── Validation ──────────────────────────────
+function isValid(shape, px, py) {
+    for (let r = 0; r < shape.length; r++) {
+        for (let c = 0; c < shape[r].length; c++) {
+            if (!shape[r][c]) continue;
+            const br = py + r, bc = px + c;
+            if (bc < 0 || bc >= COLS || br >= ROWS) return false;
+            if (br >= 0 && this.board[br][bc] !== 0) return false;
+        }
+    }
+    return true;
+}
+
+// ─── Rotation & SRS kicks ────────────────────
+function rotate(shape, dir) {
+    const rows = shape.length, cols = shape[0].length;
+    const out  = Array(cols).fill(null).map(() => Array(rows).fill(0));
+    for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++)
+            if (dir === 1)  out[c][rows - 1 - r] = shape[r][c];
+            else            out[cols - 1 - c][r]  = shape[r][c];
+    return out;
+}
+
+function getKicks(original, rotated, dir) {
+    // Basic SRS kicks: try origin, then 4 offsets
+    const w = original[0].length;
+    if (w === 4) {
+        // I-piece kicks
+        return [[0,0],[-2,0],[1,0],[-2,-1],[1,2]];
+    }
+    return [[0,0],[-1,0],[1,0],[0,-1],[-1,-1],[1,-1]];
+}
+
+// ─── Drawing ─────────────────────────────────
+function redraw() {
+    // Board cells
+    this.boardGfx.clear();
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            const col = this.board[r][c];
+            if (col) {
+                drawCell(this.boardGfx, BX + c*CELL, BY + r*CELL, col, 1.0);
+            }
+        }
+    }
+
+    // Ghost piece
+    this.ghostGfx.clear();
+    if (!this.gameOver) {
+        const gy    = getGhostY.call(this);
+        const shape = this.current.shape;
+        for (let r = 0; r < shape.length; r++)
+            for (let c = 0; c < shape[r].length; c++)
+                if (shape[r][c])
+                    drawCell(this.ghostGfx, BX + (this.current.x+c)*CELL, BY + (gy+r)*CELL, this.current.def.color, 0.18);
+    }
+
+    // Active piece
+    this.pieceGfx.clear();
+    if (!this.gameOver) {
+        const shape = this.current.shape;
+        for (let r = 0; r < shape.length; r++)
+            for (let c = 0; c < shape[r].length; c++)
+                if (shape[r][c])
+                    drawCell(this.pieceGfx, BX + (this.current.x+c)*CELL, BY + (this.current.y+r)*CELL, this.current.def.color, 1.0);
+    }
+
+    // Side panels
+    this.uiGfx.clear();
+    drawHoldPanel.call(this);
+    drawNextPanel.call(this);
+}
+
+function drawCell(gfx, px, py, color, alpha) {
+    // Main fill
+    gfx.fillStyle(color, alpha);
+    gfx.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
+    // Inner highlight (top-left shine)
+    gfx.fillStyle(0xffffff, alpha * 0.25);
+    gfx.fillRect(px + 2, py + 2, CELL - 4, 4);
+    gfx.fillRect(px + 2, py + 2, 4, CELL - 4);
+    // Glow outline
+    gfx.lineStyle(1, color, alpha * 0.6);
+    gfx.strokeRect(px + 1, py + 1, CELL - 2, CELL - 2);
+}
+
+function drawMiniPiece(gfx, def, cx, cy) {
+    const s    = 14;  // mini cell size
+    const rows = def.shape.length;
+    const cols = def.shape[0].length;
+    const ox   = cx - (cols * s) / 2;
+    const oy   = cy - (rows * s) / 2;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (def.shape[r][c]) {
+                gfx.fillStyle(def.color, 1);
+                gfx.fillRect(ox + c*s + 1, oy + r*s + 1, s-2, s-2);
+                gfx.fillStyle(0xffffff, 0.2);
+                gfx.fillRect(ox + c*s + 1, oy + r*s + 1, s-2, 3);
+            }
+        }
+    }
+}
+
+function drawHoldPanel() {
+    const cx = SIDE / 2, cy = BY + 70;
+    this.uiGfx.fillStyle(0x0f1a2e, 1);
+    this.uiGfx.fillRoundedRect(6, BY + 28, SIDE - 12, 90, 6);
+    this.uiGfx.lineStyle(1, 0x1a3a5c, 0.8);
+    this.uiGfx.strokeRoundedRect(6, BY + 28, SIDE - 12, 90, 6);
+    if (this.holdPiece) {
+        drawMiniPiece(this.uiGfx, this.holdPiece, cx, cy);
+        if (this.holdUsed) {
+            // Dim it when already used this turn
+            this.uiGfx.fillStyle(0x000000, 0.4);
+            this.uiGfx.fillRoundedRect(6, BY + 28, SIDE - 12, 90, 6);
+        }
+    }
+}
+
+function drawNextPanel() {
+    const nx = W - SIDE;
+    for (let i = 0; i < 3; i++) {
+        const cy = BY + 340 + i * 80;
+        this.uiGfx.fillStyle(0x0f1a2e, 1);
+        this.uiGfx.fillRoundedRect(nx + 6, cy - 34, SIDE - 12, 68, 6);
+        this.uiGfx.lineStyle(1, 0x1a3a5c, 0.8);
+        this.uiGfx.strokeRoundedRect(nx + 6, cy - 34, SIDE - 12, 68, 6);
+        if (this.nextQueue[i]) drawMiniPiece(this.uiGfx, this.nextQueue[i], nx + SIDE/2, cy);
+    }
+}
+
+function drawStaticUI() {
+    const mono = { fontFamily:'monospace' };
+    const g    = this.bgGfx;
+
+    // Board border
+    g.lineStyle(2, 0x1a4a7a, 0.8);
+    g.strokeRect(BX, BY, BW, BH);
+
+    // Faint column grid
+    g.lineStyle(1, 0x0a1a2e, 1);
+    for (let c = 1; c < COLS; c++) g.lineBetween(BX + c*CELL, BY, BX + c*CELL, BY + BH);
+    for (let r = 1; r < ROWS; r++) g.lineBetween(BX, BY + r*CELL, BX + BW, BY + r*CELL);
+
+    // Right panel labels
+    const rx = W - SIDE + 10;
+    this.add.text(rx, BY,       'SCORE', { ...mono, fontSize:'13px', fill:'#ffffff55', letterSpacing:3 }).setDepth(5);
+    this.add.text(rx, BY + 70,  'LINES', { ...mono, fontSize:'13px', fill:'#ffffff55', letterSpacing:3 }).setDepth(5);
+    this.add.text(rx, BY + 140, 'LEVEL', { ...mono, fontSize:'13px', fill:'#ffffff55', letterSpacing:3 }).setDepth(5);
+    this.add.text(rx, BY + 210, 'BEST',  { ...mono, fontSize:'13px', fill:'#f1c40f88', letterSpacing:3 }).setDepth(5);
+}
+
+function updateUI() {
+    this.scoreVal.setText(this.score.toLocaleString());
+    this.linesVal.setText(this.lines);
+    this.levelVal.setText(this.level);
+}
+
+// ─── Game Over ───────────────────────────────
+function triggerGameOver() {
+    this.gameOver = true;
+
+    const prev = parseInt(localStorage.getItem('tetris_best') || 0);
+    if (this.score > prev) {
+        localStorage.setItem('tetris_best', this.score);
+        this.bestVal.setText(this.score.toLocaleString());
+    }
+
+    // Dim board
+    const dim = this.add.rectangle(BX + BW/2, BY + BH/2, BW, BH, 0x000000, 0.75).setDepth(8);
+
+    this.add.rectangle(BX + BW/2, BY + BH/2, 280, 240, 0x080808, 0.95)
+        .setStrokeStyle(2, 0xe74c3c, 0.8).setDepth(9);
+    this.add.text(BX + BW/2, BY + BH/2 - 85, 'GAME OVER', {
+        fontFamily:'monospace', fontSize:'30px', fill:'#e74c3c', fontStyle:'bold'
+    }).setOrigin(0.5).setDepth(10);
+    this.add.text(BX + BW/2, BY + BH/2 - 35, 'Score: ' + this.score.toLocaleString(), {
+        fontFamily:'monospace', fontSize:'20px', fill:'#fff'
+    }).setOrigin(0.5).setDepth(10);
+    this.add.text(BX + BW/2, BY + BH/2 + 10, 'Lines: ' + this.lines + '  Level: ' + this.level, {
+        fontFamily:'monospace', fontSize:'15px', fill:'#aaa'
+    }).setOrigin(0.5).setDepth(10);
+    this.add.text(BX + BW/2, BY + BH/2 + 45, 'Best: ' + Math.max(this.score, prev).toLocaleString(), {
+        fontFamily:'monospace', fontSize:'16px', fill:'#f1c40f'
+    }).setOrigin(0.5).setDepth(10);
+
+    const btn = this.add.rectangle(BX + BW/2, BY + BH/2 + 95, 200, 42, 0xffffff, 0.08)
+        .setStrokeStyle(2, 0x00d2ff, 0.8).setDepth(10).setInteractive({ useHandCursor:true });
+    this.add.text(BX + BW/2, BY + BH/2 + 95, 'PLAY AGAIN', {
+        fontFamily:'monospace', fontSize:'18px', fill:'#fff'
+    }).setOrigin(0.5).setDepth(11);
+    btn.on('pointerdown', () => this.scene.restart());
+    btn.on('pointermove', () => btn.setFillStyle(0xffffff, 0.2));
+    btn.on('pointerout',  () => btn.setFillStyle(0xffffff, 0.08));
+}
+
+// ─── Helpers ─────────────────────────────────
+function makeBoard() {
+    return Array(ROWS).fill(null).map(() => Array(COLS).fill(0));
+}
+</script>
+</body>
+</html>

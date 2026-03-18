@@ -3,249 +3,357 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phaser Arcade Hub</title>
+    <title>GlowGrid Arcade</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <style>
         :root {
-            --neon-blue: #00d2ff;
-            --neon-pink: #ff0055;
-            --bg-dark: #0f0c29;
-            --card-bg: #1a1a2e;
+            --neon-blue:  #00d2ff;
+            --neon-pink:  #ff0055;
+            --neon-green: #00ff88;
+            --bg:         #080c18;
+            --card-bg:    #0e1628;
+            --card-border:#1e2a45;
         }
 
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
         body {
-            background-color: var(--bg-dark);
-            color: white;
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            background: var(--bg);
+            color: #fff;
+            font-family: 'Share Tech Mono', monospace;
             min-height: 100vh;
             overflow-x: hidden;
         }
 
-        /* Title Styling */
-        h1 {
-            margin-top: 40px;
-            font-size: clamp(2rem, 8vw, 3.5rem);
-            text-transform: uppercase;
-            letter-spacing: 5px;
+        /* Scanline overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 2px,
+                rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 48px 20px 24px;
+        }
+        .header h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: clamp(2.2rem, 7vw, 4rem);
+            font-weight: 900;
+            letter-spacing: 8px;
             color: var(--neon-blue);
-            text-shadow: 0 0 10px var(--neon-blue), 0 0 20px var(--neon-blue);
-            text-align: center;
+            text-shadow: 0 0 12px var(--neon-blue), 0 0 40px rgba(0,210,255,0.3);
+            text-transform: uppercase;
+        }
+        .header .sub {
+            margin-top: 10px;
+            font-size: 0.8rem;
+            letter-spacing: 5px;
+            color: #ffffff44;
+            text-transform: uppercase;
         }
 
-        /* Menu Container */
-        .container {
-            display: flex;
-            gap: 30px;
-            padding: 40px;
+        /* Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
             max-width: 1200px;
-            flex-wrap: wrap;
-            justify-content: center;
+            margin: 0 auto;
+            padding: 0 24px 40px;
         }
 
-        /* Game Card Styling */
-        .game-card {
+        /* Card */
+        .card {
             background: var(--card-bg);
-            border: 2px solid #24243e;
-            border-radius: 15px;
-            width: 260px;
-            padding: 25px;
-            text-align: center;
-            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 24px 22px 20px;
             cursor: pointer;
+            transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
             display: flex;
             flex-direction: column;
-            justify-content: space-between;
-        }
-
-        .game-card:hover {
-            transform: translateY(-10px) scale(1.02);
-            border-color: var(--neon-pink);
-            box-shadow: 0 0 25px rgba(255, 0, 85, 0.5);
-        }
-
-        .game-card h2 {
-            margin: 10px 0;
-            font-size: 1.6rem;
-            color: #fff;
-        }
-
-        .game-card p {
-            font-size: 0.95rem;
-            color: #aaa;
-            line-height: 1.4;
-            margin-bottom: 20px;
-        }
-
-        .play-btn {
-            padding: 12px 0;
-            background: var(--neon-pink);
-            color: white;
-            border-radius: 8px;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            box-shadow: 0 4px 0 #b3003b;
-        }
-
-        /* --- THE ARCADE WINDOW (BIGGER & RESPONSIVE) --- */
-        .preview-window {
-            margin: 20px auto;
-            border: 6px solid #333;
-            border-radius: 15px;
-            background: #000;
-            width: 95vw;    /* 95% of browser width */
-            height: 82vh;   /* 82% of browser height */
-            display: none;
+            gap: 10px;
             position: relative;
-            box-shadow: 0 0 40px rgba(0,0,0,0.8);
             overflow: hidden;
         }
-
-        /* CRT Scanline Effect Overlay */
-        .preview-window::after {
-            content: " ";
+        .card::before {
+            content: '';
             position: absolute;
-            top: 0; left: 0; bottom: 0; right: 0;
-            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
-                        linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
-            background-size: 100% 4px, 3px 100%;
-            pointer-events: none; /* Allows clicking through to the game */
-            z-index: 10;
+            top: -60%; left: -30%;
+            width: 160%; height: 160%;
+            background: radial-gradient(ellipse, rgba(0,210,255,0.06) 0%, transparent 70%);
+            pointer-events: none;
+            transition: opacity 0.3s;
+            opacity: 0;
         }
-
-        iframe {
-            width: 100%;
-            height: 100%;
+        .card:hover::before { opacity: 1; }
+        .card:hover {
+            transform: translateY(-8px) scale(1.015);
+            border-color: var(--neon-pink);
+            box-shadow: 0 0 28px rgba(255,0,85,0.25), 0 12px 40px rgba(0,0,0,0.5);
+        }
+        .card-icon  { font-size: 2.2rem; line-height: 1; }
+        .card-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: #fff;
+        }
+        .card-desc  { font-size: 0.78rem; color: #8899aa; line-height: 1.5; flex: 1; }
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 4px;
+        }
+        .card-score { font-size: 0.72rem; color: #f1c40f; letter-spacing: 1px; }
+        .card-btn {
+            background: var(--neon-pink);
+            color: #fff;
             border: none;
-            display: block;
+            border-radius: 6px;
+            padding: 7px 20px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 2px;
+            cursor: pointer;
+            box-shadow: 0 3px 0 #8b0030;
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+        .card-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #8b0030; }
+
+        .badge-new {
+            position: absolute; top: 14px; right: 14px;
+            background: var(--neon-green); color: #000;
+            font-size: 0.6rem; font-weight: 700; letter-spacing: 2px;
+            padding: 2px 8px; border-radius: 4px;
+        }
+        .badge-fixed {
+            position: absolute; top: 14px; right: 14px;
+            background: #f1c40f; color: #000;
+            font-size: 0.6rem; font-weight: 700; letter-spacing: 2px;
+            padding: 2px 8px; border-radius: 4px;
         }
 
-        /* Back Button Styling */
+        /* Arcade window */
+        .arcade-wrap {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 0 24px;
+        }
         .back-btn {
-            margin: 20px;
-            padding: 12px 25px;
-            cursor: pointer;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.75rem;
+            letter-spacing: 3px;
+            padding: 10px 28px;
             background: transparent;
             color: var(--neon-blue);
             border: 2px solid var(--neon-blue);
             border-radius: 30px;
-            display: none;
-            font-weight: bold;
-            text-transform: uppercase;
-            transition: 0.3s;
-            z-index: 100;
+            cursor: pointer;
+            margin-bottom: 16px;
+            transition: background 0.2s, color 0.2s, box-shadow 0.2s;
         }
-
         .back-btn:hover {
-            background: var(--neon-blue);
-            color: #000;
-            box-shadow: 0 0 20px var(--neon-blue);
+            background: var(--neon-blue); color: #000;
+            box-shadow: 0 0 22px var(--neon-blue);
         }
-
-        @media (max-width: 600px) {
-            .preview-window {
-                width: 98vw;
-                height: 70vh;
-            }
+        .arcade-window {
+            width: min(95vw, 1000px);
+            height: min(82vh, 700px);
+            border: 4px solid #1e2a45;
+            border-radius: 16px;
+            background: #000;
+            overflow: hidden;
+            box-shadow: 0 0 50px rgba(0,0,0,0.9), inset 0 0 30px rgba(0,210,255,0.04);
         }
+        iframe { width: 100%; height: 100%; border: none; display: block; }
     </style>
 </head>
 <body>
 
-    <h1 id="hub-title">Phaser Arcade</h1>
+<div id="hub">
+    <div class="header">
+        <h1>GlowGrid</h1>
+        <div class="sub">Arcade — 10 Games</div>
+    </div>
 
-    <button id="back-button" class="back-btn" onclick="closeGame()">← EXIT TO MENU</button>
+    <div class="grid">
 
-    <div class="container" id="menu">
-        
-        <div class="game-card" onclick="launchGame('tic_tac_toe.html')">
-            <div>
-                <h2>Tic-Tac-Toe</h2>
-                <p>Strategic grid combat. First to three wins.</p>
+        <div class="card" onclick="launch('tic_tac_toe.html')">
+            <div class="card-icon">⭕</div>
+            <div class="card-title">TIC-TAC-TOE</div>
+            <div class="card-desc">Strategic grid combat. First to three wins.</div>
+            <div class="card-footer">
+                <div class="card-score"></div>
+                <button class="card-btn">LAUNCH</button>
             </div>
-            <div class="play-btn">Launch</div>
         </div>
 
-        <div class="game-card" onclick="launchGame('connect_four.html')">
-            <div>
-                <h2>Four In A Row</h2>
-                <p>Gravity-defying strategy. Connect the line.</p>
+        <div class="card" onclick="launch('connect_four.html')">
+            <div class="card-icon">🔴</div>
+            <div class="card-title">FOUR IN A ROW</div>
+            <div class="card-desc">2-player or vs AI with Easy / Medium / Hard difficulty.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-c4"></div>
+                <button class="card-btn">LAUNCH</button>
             </div>
-            <div class="play-btn">Launch</div>
         </div>
 
-        <div class="game-card" onclick="launchGame('frogger.html')">
-            <div>
-                <h2>Frogger</h2>
-                <p>The ultimate commute simulator. Don't get squashed.</p>
+        <div class="card" onclick="launch('frogger.html')">
+            <span class="badge-fixed">FIXED</span>
+            <div class="card-icon">🐸</div>
+            <div class="card-title">FROGGER</div>
+            <div class="card-desc">High-stakes road & river crossing. 3 lives. Don't drown!</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-frog"></div>
+                <button class="card-btn">LAUNCH</button>
             </div>
-            <div class="play-btn">Launch</div>
         </div>
 
-        <div class="game-card" onclick="launchGame('mine_dash.html')">
-            <div>
-                <h2>Mine Dash</h2>
-                <p>Fast-paced running. Jump or die.</p>
+        <div class="card" onclick="launch('mine_dash.html')">
+            <span class="badge-fixed">FIXED</span>
+            <div class="card-icon">🏃</div>
+            <div class="card-title">MINE DASH</div>
+            <div class="card-desc">Fast-paced infinite runner. Double-jump to survive.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-mine"></div>
+                <button class="card-btn">LAUNCH</button>
             </div>
-            <div class="play-btn">Launch</div>
         </div>
 
-        <div class="game-card" onclick="launchGame('battle_ship.html')">
-            <div>
-                <h2>Battleship</h2>
-                <p>Search and destroy. Command the seas.</p>
+        <div class="card" onclick="launch('battle_ship.html')">
+            <div class="card-icon">⚓</div>
+            <div class="card-title">BATTLESHIP</div>
+            <div class="card-desc">Search & destroy. Hunt/Target AI reads your fleet.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-bs"></div>
+                <button class="card-btn">LAUNCH</button>
             </div>
-            <div class="play-btn">Launch</div>
         </div>
 
-        <div class="game-card" onclick="launchGame('dodge_and_catch.html')">
-            <div>
-                <h2>Dodge & Catch</h2>
-                <p>Grab the gems, avoid the blast.</p>
+        <div class="card" onclick="launch('dodge_and_catch.html')">
+            <div class="card-icon">💎</div>
+            <div class="card-title">DODGE & CATCH</div>
+            <div class="card-desc">Grab the gems, avoid the bombs.</div>
+            <div class="card-footer">
+                <div class="card-score"></div>
+                <button class="card-btn">LAUNCH</button>
             </div>
-            <div class="play-btn">Launch</div>
+        </div>
+
+        <div class="card" onclick="launch('pong.html')">
+            <div class="card-icon">🏓</div>
+            <div class="card-title">PONG</div>
+            <div class="card-desc">Classic paddle battle vs the CPU. First to 7 wins.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-pong"></div>
+                <button class="card-btn">LAUNCH</button>
+            </div>
+        </div>
+
+        <div class="card" onclick="launch('minesweeper.html')">
+            <div class="card-icon">💣</div>
+            <div class="card-title">MINESWEEPER</div>
+            <div class="card-desc">Easy, Medium or Hard. Flag the mines, clear the board.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-ms"></div>
+                <button class="card-btn">LAUNCH</button>
+            </div>
+        </div>
+
+        <div class="card" onclick="launch('tetris.html')">
+            <span class="badge-new">NEW</span>
+            <div class="card-icon">🟦</div>
+            <div class="card-title">TETRIS</div>
+            <div class="card-desc">All 7 pieces, ghost piece, hold, 3-piece preview, levels & high score.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-tetris"></div>
+                <button class="card-btn">LAUNCH</button>
+            </div>
+        </div>
+
+        <div class="card" onclick="launch('space_invaders.html')">
+            <span class="badge-new">NEW</span>
+            <div class="card-icon">👾</div>
+            <div class="card-title">SPACE INVADERS</div>
+            <div class="card-desc">Defend Earth from alien invaders. Waves of difficulty. Score multiplier.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-invaders"></div>
+                <button class="card-btn">LAUNCH</button>
+            </div>
+        </div>
+
+        <div class="card" onclick="launch('snake.html')">
+            <span class="badge-new">NEW</span>
+            <div class="card-icon">🐍</div>
+            <div class="card-title">SNAKE</div>
+            <div class="card-desc">Classic snake. Eat food, grow longer, don't hit walls or yourself.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-snake"></div>
+                <button class="card-btn">LAUNCH</button>
+            </div>
         </div>
 
     </div>
+</div>
 
-    <div id="arcade-window" class="preview-window">
-        <iframe src="" id="game-frame" allow="autoplay"></iframe>
+<!-- Arcade view -->
+<div class="arcade-wrap" id="arcade-wrap">
+    <button class="back-btn" onclick="closeGame()">← EXIT TO MENU</button>
+    <div class="arcade-window">
+        <iframe id="game-frame" src="" allow="autoplay"></iframe>
     </div>
+</div>
 
-    <script>
-        function launchGame(url) {
-            // Smoothly transition UI
-            document.getElementById('menu').style.display = 'none';
-            document.getElementById('hub-title').style.display = 'none';
-            
-            const arcadeWindow = document.getElementById('arcade-window');
-            const backBtn = document.getElementById('back-button');
-            const gameFrame = document.getElementById('game-frame');
-            
-            arcadeWindow.style.display = 'block';
-            backBtn.style.display = 'inline-block';
-            
-            // Set the URL to load the specific game file
-            gameFrame.src = url;
+<script>
+    const SCORES = [
+        { id: 'score-frog',   key: 'frogger_best',         label: 'BEST' },
+        { id: 'score-mine',   key: 'minedash_best',         label: 'BEST' },
+        { id: 'score-bs',     key: 'battleship_wins',       label: 'WINS' },
+        { id: 'score-pong',   key: 'pong_best',             label: 'BEST' },
+        { id: 'score-ms',     key: 'minesweeper_best_easy', label: 'BEST' },
+        { id: 'score-tetris', key: 'tetris_best',           label: 'BEST' },
+        { id: 'score-c4',     key: 'c4_wins',               label: 'WINS' },
+        { id: 'score-invaders', key: 'spaceinvaders_best',  label: 'BEST' },
+        { id: 'score-snake',  key: 'snake_best',            label: 'BEST' },
+    ];
 
-            // Scroll to top so the game is centered
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
+    function loadScores() {
+        SCORES.forEach(({ id, key, label }) => {
+            const el  = document.getElementById(id);
+            const val = localStorage.getItem(key);
+            if (el && val !== null && val !== '0') {
+                el.textContent = label + ': ' + val;
+            }
+        });
+    }
+    loadScores();
 
-        function closeGame() {
-            // Switch back to menu view
-            document.getElementById('menu').style.display = 'flex';
-            document.getElementById('hub-title').style.display = 'block';
-            
-            document.getElementById('arcade-window').style.display = 'none';
-            document.getElementById('back-button').style.display = 'none';
-            
-            // Clear the iframe src to stop game sounds/logic in the background
-            document.getElementById('game-frame').src = "";
-        }
-    </script>
+    function launch(url) {
+        document.getElementById('hub').style.display = 'none';
+        document.getElementById('arcade-wrap').style.display = 'flex';
+        document.getElementById('game-frame').src = url;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function closeGame() {
+        document.getElementById('game-frame').src = '';
+        document.getElementById('arcade-wrap').style.display = 'none';
+        document.getElementById('hub').style.display = 'block';
+        loadScores();
+    }
+</script>
 </body>
 </html>

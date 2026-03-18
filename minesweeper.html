@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minesweeper</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { display:flex; justify-content:center; align-items:center; height:100vh; margin:0; background:#0a0a14; overflow:hidden; }
+    </style>
+</head>
+<body>
+<script>
+// ── Difficulty presets ─────────────────────────
+const PRESETS = {
+    easy:   { cols: 9,  rows: 9,  mines: 10 },
+    medium: { cols: 16, rows: 16, mines: 40 },
+    hard:   { cols: 30, rows: 16, mines: 99 },
+};
+
+// Cell size scales down for bigger grids to fit screen
+function cellSize(cols) {
+    if (cols <= 9)  return 38;
+    if (cols <= 16) return 30;
+    return 22;
+}
+
+const HEADER_H = 80;
+const PAD      = 16;
+
+// Number colours (classic Minesweeper palette)
+const NUM_COLORS = [null,'#4fc3f7','#81c784','#e57373','#9575cd','#ff8a65','#4dd0e1','#f06292','#90a4ae'];
+
+let chosenDiff = 'easy';
+
+const config = {
+    type: Phaser.AUTO,
+    backgroundColor: '#0d0d1a',
+    scene: { create, update }
+};
+new Phaser.Game(config);
+
+// ── Create / reset ────────────────────────────
+function create() {
+    buildGame.call(this, chosenDiff);
+}
+
+function buildGame(diff) {
+    chosenDiff = diff;
+    const preset = PRESETS[diff];
+    const CS     = cellSize(preset.cols);
+    const W      = preset.cols * CS + PAD * 2;
+    const H      = preset.rows * CS + HEADER_H + PAD * 2;
+
+    // Resize canvas
+    this.scale.resize(W, H);
+    this.children.removeAll(true);
+
+    // State
+    this.diff       = diff;
+    this.COLS       = preset.cols;
+    this.ROWS       = preset.rows;
+    this.MINES      = preset.mines;
+    this.CS         = CS;
+    this.W          = W;
+    this.H          = H;
+    this.board      = make2D(this.ROWS, this.COLS, 0);
+    this.revealed   = make2D(this.ROWS, this.COLS, false);
+    this.flagged    = make2D(this.ROWS, this.COLS, false);
+    this.gameState  = 'idle';
+    this.firstClick = true;
+    this.elapsed    = 0;
+    this.flagCount  = 0;
+
+    drawBackground.call(this);
+    drawHeader.call(this);
+    drawGrid.call(this);
+
+    this.input.mouse.disableContextMenu();
+}
+
+// ── Background ───────────────────────────────
+function drawBackground() {
+    const g = this.add.graphics();
+    g.fillStyle(0x0d0d1a);
+    g.fillRect(0, 0, this.W, this.H);
+    // Header separator
+    g.fillStyle(0x1a1a2e);
+    g.fillRect(0, 0, this.W, HEADER_H);
+    g.lineStyle(2, 0x00d2ff, 0.25);
+    g.lineBetween(0, HEADER_H, this.W, HEADER_H);
+}
+
+// ── Header ───────────────────────────────────
+function drawHeader() {
+    const mono = { fontFamily: 'monospace' };
+
+    // Difficulty tabs
+    const diffs  = ['easy', 'medium', 'hard'];
+    const labels = ['EASY', 'MED', 'HARD'];
+    diffs.forEach((d, i) => {
+        const active = d === this.diff;
+        const tx = PAD + i * 80 + 34;
+        const bg = this.add.rectangle(tx, 22, 68, 26, active ? 0x00d2ff : 0x1e2240, active ? 1 : 0.7)
+            .setStrokeStyle(1, active ? 0x00d2ff : 0x2a3060, 0.8)
+            .setInteractive({ useHandCursor: true });
+        this.add.text(tx, 22, labels[i], {
+            ...mono, fontSize: '12px', fill: active ? '#000' : '#8899aa', fontStyle: 'bold'
+        }).setOrigin(0.5);
+        bg.on('pointerdown', () => buildGame.call(this, d));
+        bg.on('pointermove', () => { if (!active) bg.setFillStyle(0x2a3060); });
+        bg.on('pointerout',  () => { if (!active) bg.setFillStyle(0x1e2240, 0.7); });
+    });
+
+    // Smiley reset button
+    this.smiley = this.add.text(this.W / 2, 24, '🙂', { fontSize: '26px' })
+        .setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.smiley.on('pointerdown', () => buildGame.call(this, this.diff));
+
+    // Mine counter
+    this.mineCountText = this.add.text(this.W - PAD, 14, '💣 ' + this.MINES, {
+        ...mono, fontSize: '20px', fill: '#e74c3c', fontStyle: 'bold'
+    }).setOrigin(1, 0);
+
+    // Timer
+    this.timerText = this.add.text(this.W - PAD, 42, '⏱ 0s', {
+        ...mono, fontSize: '14px', fill: '#f1c40f'
+    }).setOrigin(1, 0);
+
+    // Best time
+    const best = localStorage.getItem('minesweeper_best_' + this.diff);
+    this.bestText = this.add.text(this.W / 2, 54, best ? 'BEST: ' + best + 's' : '', {
+        ...mono, fontSize: '12px', fill: '#ffffff33'
+    }).setOrigin(0.5, 0);
+}
+
+// ── Grid ─────────────────────────────────────
+function drawGrid() {
+    this.cellBg  = [];
+    this.cellTxt = [];
+    const CS = this.CS;
+
+    for (let r = 0; r < this.ROWS; r++) {
+        this.cellBg[r]  = [];
+        this.cellTxt[r] = [];
+        for (let c = 0; c < this.COLS; c++) {
+            const cx = PAD + c * CS + CS / 2;
+            const cy = HEADER_H + PAD + r * CS + CS / 2;
+
+            const bg = this.add.rectangle(cx, cy, CS - 2, CS - 2, 0x1e2240)
+                .setStrokeStyle(1, 0x2a3060, 0.6)
+                .setInteractive({ useHandCursor: true });
+
+            bg.on('pointerdown', ptr => onCellClick.call(this, r, c, ptr));
+            bg.on('pointermove', ()  => onCellHover.call(this, r, c, bg));
+            bg.on('pointerout',  ()  => onCellOut.call(this, r, c, bg));
+
+            const fontSize = CS >= 30 ? '16px' : '12px';
+            const txt = this.add.text(cx, cy, '', {
+                fontFamily: 'monospace', fontSize, fontStyle: 'bold'
+            }).setOrigin(0.5);
+
+            this.cellBg[r][c]  = bg;
+            this.cellTxt[r][c] = txt;
+        }
+    }
+}
+
+// ── Input handlers ────────────────────────────
+function onCellClick(r, c, ptr) {
+    if (this.gameState === 'won' || this.gameState === 'lost') return;
+
+    if (ptr.rightButtonDown()) {
+        toggleFlag.call(this, r, c);
+    } else if (this.revealed[r][c]) {
+        // Chord click — if correct number of flags around, reveal all unflagged neighbours
+        chordReveal.call(this, r, c);
+    } else {
+        revealCell.call(this, r, c);
+    }
+}
+
+function onCellHover(r, c, bg) {
+    if (!this.revealed[r][c] && !this.flagged[r][c]) bg.setFillStyle(0x2a3460);
+}
+function onCellOut(r, c, bg) {
+    if (!this.revealed[r][c] && !this.flagged[r][c]) bg.setFillStyle(0x1e2240);
+}
+
+// ── Mine placement ────────────────────────────
+function placeMines(safeR, safeC) {
+    let placed = 0;
+    while (placed < this.MINES) {
+        const r = Phaser.Math.Between(0, this.ROWS - 1);
+        const c = Phaser.Math.Between(0, this.COLS - 1);
+        if (this.board[r][c] === -1) continue;
+        if (Math.abs(r - safeR) <= 1 && Math.abs(c - safeC) <= 1) continue;
+        this.board[r][c] = -1;
+        placed++;
+    }
+    // Calculate neighbour counts
+    for (let r = 0; r < this.ROWS; r++) {
+        for (let c = 0; c < this.COLS; c++) {
+            if (this.board[r][c] === -1) continue;
+            let n = 0;
+            eachNeighbor.call(this, r, c, (nr, nc) => { if (this.board[nr][nc] === -1) n++; });
+            this.board[r][c] = n;
+        }
+    }
+}
+
+// ── Reveal ────────────────────────────────────
+function revealCell(r, c) {
+    if (this.gameState === 'won' || this.gameState === 'lost') return;
+    if (this.revealed[r][c] || this.flagged[r][c]) return;
+
+    if (this.firstClick) {
+        this.firstClick = false;
+        this.gameState  = 'playing';
+        placeMines.call(this, r, c);
+    }
+
+    this.revealed[r][c] = true;
+    const val = this.board[r][c];
+    const bg  = this.cellBg[r][c];
+    const txt = this.cellTxt[r][c];
+
+    if (val === -1) {
+        bg.setFillStyle(0x8b1a1a);
+        txt.setText('💣').setFontSize(this.CS >= 30 ? 18 : 13);
+        triggerLoss.call(this, r, c);
+        return;
+    }
+
+    bg.setFillStyle(0x0d1020).setStrokeStyle(1, 0x141830, 0.4);
+    if (val > 0) {
+        txt.setText(String(val)).setFill(NUM_COLORS[val]);
+    }
+
+    if (val === 0) {
+        // Flood fill
+        eachNeighbor.call(this, r, c, (nr, nc) => {
+            if (!this.revealed[nr][nc]) revealCell.call(this, nr, nc);
+        });
+    }
+
+    checkWin.call(this);
+}
+
+// ── Chord reveal ─────────────────────────────
+function chordReveal(r, c) {
+    if (!this.revealed[r][c] || this.board[r][c] <= 0) return;
+    let flagsAround = 0;
+    eachNeighbor.call(this, r, c, (nr, nc) => { if (this.flagged[nr][nc]) flagsAround++; });
+    if (flagsAround === this.board[r][c]) {
+        eachNeighbor.call(this, r, c, (nr, nc) => {
+            if (!this.revealed[nr][nc] && !this.flagged[nr][nc]) revealCell.call(this, nr, nc);
+        });
+    }
+}
+
+// ── Flag toggle ───────────────────────────────
+function toggleFlag(r, c) {
+    if (this.gameState === 'won' || this.gameState === 'lost') return;
+    if (this.revealed[r][c]) return;
+    if (this.firstClick) return; // can't flag before first reveal
+
+    this.flagged[r][c] = !this.flagged[r][c];
+    this.flagCount += this.flagged[r][c] ? 1 : -1;
+
+    const bg  = this.cellBg[r][c];
+    const txt = this.cellTxt[r][c];
+
+    if (this.flagged[r][c]) {
+        bg.setFillStyle(0x1a2e1a);
+        txt.setText('🚩').setFontSize(this.CS >= 30 ? 16 : 12);
+    } else {
+        bg.setFillStyle(0x1e2240);
+        txt.setText('');
+    }
+    this.mineCountText.setText('💣 ' + (this.MINES - this.flagCount));
+}
+
+// ── Win / Lose ───────────────────────────────
+function checkWin() {
+    for (let r = 0; r < this.ROWS; r++)
+        for (let c = 0; c < this.COLS; c++)
+            if (!this.revealed[r][c] && this.board[r][c] !== -1) return;
+    triggerWin.call(this);
+}
+
+function triggerWin() {
+    this.gameState = 'won';
+    this.smiley.setText('😎');
+
+    const secs    = Math.floor(this.elapsed / 1000);
+    const bestKey = 'minesweeper_best_' + this.diff;
+    const prev    = parseInt(localStorage.getItem(bestKey) || 99999);
+    if (secs < prev) localStorage.setItem(bestKey, secs);
+    this.bestText.setText('BEST: ' + Math.min(secs, prev) + 's');
+
+    // Auto-flag remaining mines
+    for (let r = 0; r < this.ROWS; r++)
+        for (let c = 0; c < this.COLS; c++)
+            if (this.board[r][c] === -1 && !this.flagged[r][c]) {
+                this.cellBg[r][c].setFillStyle(0x1a2e1a);
+                this.cellTxt[r][c].setText('🚩').setFontSize(this.CS >= 30 ? 16 : 12);
+            }
+
+    this.time.delayedCall(500, () => showPanel.call(this, true, secs));
+}
+
+function triggerLoss(hitR, hitC) {
+    this.gameState = 'lost';
+    this.smiley.setText('😵');
+    this.cameras.main.shake(220, 0.012);
+
+    // Cascade reveal all mines with staggered delay
+    for (let r = 0; r < this.ROWS; r++) {
+        for (let c = 0; c < this.COLS; c++) {
+            const isMine    = this.board[r][c] === -1;
+            const isFlagged = this.flagged[r][c];
+            const isHit     = r === hitR && c === hitC;
+            if (isHit) continue;
+
+            if (isMine && !isFlagged) {
+                const delay = Phaser.Math.Between(40, 500);
+                const rr = r, cc = c;
+                this.time.delayedCall(delay, () => {
+                    if (this.cellBg[rr] && this.cellBg[rr][cc]) {
+                        this.cellBg[rr][cc].setFillStyle(0x2a1a1a);
+                        this.cellTxt[rr][cc].setText('💣').setFontSize(this.CS >= 30 ? 16 : 12);
+                    }
+                });
+            } else if (isFlagged && !isMine) {
+                // Wrong flag
+                this.cellTxt[r][c].setText('❌').setFontSize(this.CS >= 30 ? 16 : 12);
+                this.cellBg[r][c].setFillStyle(0x3a1a1a);
+            }
+        }
+    }
+
+    this.time.delayedCall(700, () => showPanel.call(this, false));
+}
+
+function showPanel(won, secs) {
+    const pw = Math.min(300, this.W - 32);
+    this.add.rectangle(this.W/2, this.H/2, pw, 200, 0x080812, 0.94)
+        .setStrokeStyle(2, won ? 0x00d2ff : 0xe74c3c, 0.9).setDepth(50);
+
+    this.add.text(this.W/2, this.H/2 - 70, won ? '🎉 YOU WIN!' : '💥 KABOOM!', {
+        fontSize: '30px', fill: won ? '#2ecc71' : '#e74c3c', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(51);
+
+    if (won) {
+        this.add.text(this.W/2, this.H/2 - 20, 'Time: ' + secs + 's', {
+            fontSize: '20px', fill: '#fff', fontFamily: 'monospace'
+        }).setOrigin(0.5).setDepth(51);
+        const best = localStorage.getItem('minesweeper_best_' + this.diff);
+        this.add.text(this.W/2, this.H/2 + 18, 'Best: ' + best + 's', {
+            fontSize: '16px', fill: '#f1c40f', fontFamily: 'monospace'
+        }).setOrigin(0.5).setDepth(51);
+    } else {
+        this.add.text(this.W/2, this.H/2 - 10, 'Better luck next time!', {
+            fontSize: '16px', fill: '#aaa', fontFamily: 'monospace'
+        }).setOrigin(0.5).setDepth(51);
+    }
+
+    const btn = this.add.rectangle(this.W/2, this.H/2 + 68, 200, 38, 0xffffff, 0.07)
+        .setStrokeStyle(2, won ? 0x00d2ff : 0xe74c3c, 0.8).setDepth(51)
+        .setInteractive({ useHandCursor: true });
+    this.add.text(this.W/2, this.H/2 + 68, 'PLAY AGAIN', {
+        fontSize: '16px', fill: '#fff', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(52);
+    btn.on('pointerdown', () => buildGame.call(this, this.diff));
+    btn.on('pointermove', () => btn.setFillStyle(0xffffff, 0.18));
+    btn.on('pointerout',  () => btn.setFillStyle(0xffffff, 0.07));
+}
+
+// ── Update ────────────────────────────────────
+function update(_, delta) {
+    if (this.gameState === 'playing') {
+        this.elapsed += delta;
+        this.timerText.setText('⏱ ' + Math.floor(this.elapsed / 1000) + 's');
+    }
+}
+
+// ── Helpers ───────────────────────────────────
+function eachNeighbor(r, c, fn) {
+    for (let dr = -1; dr <= 1; dr++)
+        for (let dc = -1; dc <= 1; dc++) {
+            if (!dr && !dc) continue;
+            const nr = r+dr, nc = c+dc;
+            if (nr>=0 && nr<this.ROWS && nc>=0 && nc<this.COLS) fn(nr, nc);
+        }
+}
+
+function make2D(rows, cols, fill) {
+    return Array(rows).fill(null).map(() => Array(cols).fill(fill));
+}
+</script>
+</body>
+</html>

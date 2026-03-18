@@ -3,143 +3,391 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phaser Battleship</title>
+    <title>Battleship</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <style>
-        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #1a1a2e; font-family: sans-serif; }
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0a0e1a; font-family: sans-serif; }
     </style>
 </head>
 <body>
-
 <script>
-const GRID_SIZE = 8; // 8x8 grid
-const CELL = 45;
-const OFFSET_X = 50;
-const OFFSET_Y = 100;
+const G    = 8;
+const CELL = 42;
+const PAD  = 48;
+const TOP  = 110;
+const GAP  = 380;
+
+// Ships: one entry per ship, length only
+// 5 ships total = 4+3+3+2+2 = 14 cells
+const SHIPS = [4, 3, 3, 2, 2];
 
 const config = {
     type: Phaser.AUTO,
-    width: 800,
-    height: 600,
-    backgroundColor: '#16213e',
-    scene: { create: create }
+    width: 820, height: 570,
+    backgroundColor: '#0d1b2a',
+    scene: { create }
 };
+new Phaser.Game(config);
 
-const game = new Phaser.Game(config);
+// AI state — kept outside scene so restart can reset them
+let aiMode  = 'hunt';
+let aiHits  = [];
+let aiQueue = [];
 
 function create() {
-    this.playerBoard = Array(GRID_SIZE).fill(0).map(() => Array(GRID_SIZE).fill(0));
-    this.cpuBoard = Array(GRID_SIZE).fill(0).map(() => Array(GRID_SIZE).fill(0));
-    this.playerHits = Array(GRID_SIZE).fill(0).map(() => Array(GRID_SIZE).fill(0));
-    this.cpuHits = Array(GRID_SIZE).fill(0).map(() => Array(GRID_SIZE).fill(0));
-    
-    this.gameState = 'PLACEMENT'; // PLACEMENT or BATTLE
-    this.playerShipsPlaced = 0;
-    this.totalShipCells = 10; // Total segments to sink
-    this.playerSunk = 0;
-    this.cpuSunk = 0;
+    this.playerBoard = make2D(G, 0);
+    this.cpuBoard    = make2D(G, 0);
+    this.playerHits  = make2D(G, null);
+    this.cpuHits     = make2D(G, null);
 
-    // UI Text
-    this.statusText = this.add.text(400, 40, 'PLACE YOUR SHIPS (Click 10 squares)', { fontSize: '24px', fill: '#e94560' }).setOrigin(0.5);
-    this.add.text(OFFSET_X + 100, 80, 'YOUR FLEET', { fontSize: '16px', fill: '#fff' }).setOrigin(0.5);
-    this.add.text(OFFSET_X + 500, 80, 'ENEMY RADAR', { fontSize: '16px', fill: '#fff' }).setOrigin(0.5);
+    this.state          = 'PLACEMENT';
+    this.placingShipIdx = 0;
+    this.placingCells   = [];
+    this.playerSunk     = 0;
+    this.cpuSunk        = 0;
+    this.totalCells     = SHIPS.reduce((a, l) => a + l, 0);
+    this.playerTurn     = true;
 
-    // Draw Grids
-    this.playerGridSprites = createGrid.call(this, OFFSET_X, OFFSET_Y, true);
-    this.cpuGridSprites = createGrid.call(this, OFFSET_X + 400, OFFSET_Y, false);
+    aiMode = 'hunt'; aiHits = []; aiQueue = [];
 
-    // Randomize CPU ships
-    placeCpuShips.call(this);
+    // ── Background at depth 0 ──
+    drawOcean.call(this);
+
+    // ── Labels at depth 1 ──
+    this.add.text(PAD + G*CELL/2,       TOP - 28, 'YOUR FLEET',   { fontSize:'15px', fill:'#7fb3d3', letterSpacing:3 }).setOrigin(0.5).setDepth(1);
+    this.add.text(PAD + GAP + G*CELL/2, TOP - 28, 'ENEMY RADAR',  { fontSize:'15px', fill:'#e94560', letterSpacing:3 }).setOrigin(0.5).setDepth(1);
+
+    'ABCDEFGH'.split('').forEach((ch, i) => {
+        this.add.text(PAD + i*CELL + CELL/2,       TOP - 14, ch, { fontSize:'11px', fill:'#ffffff44' }).setOrigin(0.5).setDepth(1);
+        this.add.text(PAD + GAP + i*CELL + CELL/2, TOP - 14, ch, { fontSize:'11px', fill:'#ffffff44' }).setOrigin(0.5).setDepth(1);
+    });
+    for (let i = 0; i < G; i++) {
+        this.add.text(PAD - 14,       TOP + i*CELL + CELL/2, i+1, { fontSize:'11px', fill:'#ffffff44' }).setOrigin(0.5).setDepth(1);
+        this.add.text(PAD + GAP - 14, TOP + i*CELL + CELL/2, i+1, { fontSize:'11px', fill:'#ffffff44' }).setOrigin(0.5).setDepth(1);
+    }
+
+    // ── Grids at depth 2 — ABOVE all background graphics ──
+    this.playerSprites = createGrid.call(this, PAD,       TOP, true);
+    this.cpuSprites    = createGrid.call(this, PAD + GAP, TOP, false);
+
+    // ── Status text at depth 3 ──
+    this.statusText = this.add.text(410, 34, '', { fontSize:'20px', fill:'#fff' }).setOrigin(0.5).setDepth(3);
+    this.subText    = this.add.text(410, 62, '', { fontSize:'13px', fill:'#aaa' }).setOrigin(0.5).setDepth(3);
+
+    const best = localStorage.getItem('battleship_wins') || 0;
+    this.add.text(810, 10, 'WINS: ' + best, { fontSize:'14px', fill:'#f1c40f', fontFamily:'monospace' }).setOrigin(1,0).setDepth(3);
+
+    drawShipPanel.call(this);
+    placeShipsRandom.call(this, this.cpuBoard);
+    startPlacement.call(this);
 }
 
-function createGrid(offsetX, offsetY, isPlayer) {
-    let sprites = [];
-    for (let r = 0; r < GRID_SIZE; r++) {
-        sprites[r] = [];
-        for (let c = 0; c < GRID_SIZE; c++) {
-            let cell = this.add.rectangle(offsetX + c * CELL, offsetY + r * CELL, CELL - 2, CELL - 2, 0x0f3460)
-                .setOrigin(0)
-                .setInteractive({ useHandCursor: true });
+function drawOcean() {
+    // Depth 0 — behind everything
+    const bg = this.add.graphics().setDepth(0);
+    bg.fillGradientStyle(0x0d1b2a, 0x0d1b2a, 0x0a1628, 0x0a1628, 1);
+    bg.fillRect(0, 0, 820, 570);
+    // Very subtle background grid — NOT interactive, just visual
+    bg.lineStyle(1, 0x1a3a5c, 0.2);
+    for (let x = 0; x < 820; x += 40) bg.lineBetween(x, 0, x, 570);
+    for (let y = 0; y < 570; y += 40) bg.lineBetween(0, y, 820, y);
+}
 
-            cell.on('pointerdown', () => handleCellClick.call(this, r, c, isPlayer));
+function drawShipPanel() {
+    let x = 80, y = 548;
+    this.add.text(x - 60, y - 6, 'SHIPS:', { fontSize:'12px', fill:'#7fb3d3' }).setDepth(3);
+    SHIPS.forEach(len => {
+        for (let s = 0; s < len; s++) {
+            this.add.rectangle(x + s*16 + 7, y, 14, 14, 0x2ecc71, 0.5).setOrigin(0.5).setDepth(3);
+        }
+        x += len * 16 + 8;
+    });
+}
+
+function createGrid(ox, oy, isPlayer) {
+    const sprites = [];
+    for (let r = 0; r < G; r++) {
+        sprites[r] = [];
+        for (let c = 0; c < G; c++) {
+            const cx = ox + c * CELL + CELL / 2;
+            const cy = oy + r * CELL + CELL / 2;
+
+            // depth 2 puts cells above all background graphics
+            const cell = this.add.rectangle(cx, cy, CELL - 3, CELL - 3, 0x0f3460)
+                .setDepth(2)
+                .setInteractive({ useHandCursor: true })
+                .setStrokeStyle(1, 0x1a4a7a, 0.6);
+
+            // Hover: only highlight if the cell hasn't been shot yet
+            cell.on('pointermove', () => {
+                if (!cell.wasShot) cell.setFillStyle(0x1a4a8a);
+            });
+            cell.on('pointerout', () => {
+                if (!cell.wasShot && !cell.isShip) cell.setFillStyle(0x0f3460);
+                else if (!cell.wasShot && cell.isShip)  cell.setFillStyle(0x2ecc71);
+            });
+            cell.on('pointerdown', () => handleClick.call(this, r, c, isPlayer));
+
+            cell.wasShot = false;
+            cell.isShip  = false;
             sprites[r][c] = cell;
         }
     }
+
+    // Grid border outline — also at depth 2
+    const g = this.add.graphics().setDepth(2);
+    g.lineStyle(2, 0x1a6a9a, 0.5);
+    g.strokeRect(ox, oy, G * CELL, G * CELL);
+
     return sprites;
 }
 
-function handleCellClick(r, c, isPlayerCell) {
-    if (this.gameState === 'PLACEMENT' && isPlayerCell) {
-        if (this.playerBoard[r][c] === 0 && this.playerShipsPlaced < this.totalShipCells) {
-            this.playerBoard[r][c] = 1;
-            this.playerGridSprites[r][c].setFillStyle(0x2ecc71);
-            this.playerShipsPlaced++;
-            if (this.playerShipsPlaced === this.totalShipCells) {
-                this.gameState = 'BATTLE';
-                this.statusText.setText('BATTLE START! ATTACK THE RADAR');
+// ── Placement ──
+
+function startPlacement() {
+    this.placingShipIdx = 0;
+    nextShipPrompt.call(this);
+}
+
+function nextShipPrompt() {
+    if (this.placingShipIdx >= SHIPS.length) {
+        this.state = 'BATTLE';
+        this.statusText.setText('⚔  BATTLE START!');
+        this.subText.setText('Click the enemy radar to fire');
+        return;
+    }
+    const len = SHIPS[this.placingShipIdx];
+    this.placingCells = [];
+    this.statusText.setText('PLACE YOUR SHIPS');
+    this.subText.setText('Place your ' + lenName(len) + ' (' + len + ' cell' + (len > 1 ? 's' : '') + ')');
+}
+
+function lenName(l) {
+    return (['', 'Submarine', 'Destroyer', 'Cruiser', 'Battleship'][l]) || (l + '-cell ship');
+}
+
+function handleClick(r, c, isPlayer) {
+    if (this.state === 'PLACEMENT' && isPlayer) {
+        handlePlacement.call(this, r, c);
+    } else if (this.state === 'BATTLE' && !isPlayer && this.playerTurn) {
+        handleShot.call(this, r, c);
+    }
+}
+
+function handlePlacement(r, c) {
+    if (this.playerBoard[r][c] === 1) return;
+
+    const len = SHIPS[this.placingShipIdx];
+
+    // Validate adjacency and straight line
+    if (this.placingCells.length > 0) {
+        const last = this.placingCells[this.placingCells.length - 1];
+        const dr   = r - last[0];
+        const dc   = c - last[1];
+        if (Math.abs(dr) + Math.abs(dc) !== 1) {
+            flashStatus.call(this, 'Cells must be adjacent!', '#e94560');
+            return;
+        }
+        if (this.placingCells.length > 1) {
+            const expDr = this.placingCells[1][0] - this.placingCells[0][0];
+            const expDc = this.placingCells[1][1] - this.placingCells[0][1];
+            if (dr !== expDr || dc !== expDc) {
+                flashStatus.call(this, 'Must be a straight line!', '#e94560');
+                return;
             }
         }
-    } else if (this.gameState === 'BATTLE' && !isPlayerCell) {
-        if (this.playerHits[r][c] !== 0) return; // Already clicked
-
-        if (this.cpuBoard[r][c] === 1) {
-            this.cpuGridSprites[r][c].setFillStyle(0xe94560); // HIT
-            this.playerHits[r][c] = 'H';
-            this.cpuSunk++;
-            this.cameras.main.shake(100, 0.005);
-        } else {
-            this.cpuGridSprites[r][c].setFillStyle(0xffffff, 0.2); // MISS
-            this.playerHits[r][c] = 'M';
-        }
-
-        if (this.cpuSunk === this.totalShipCells) {
-            endGame.call(this, "VICTORY! ENEMY SUNK");
-        } else {
-            this.time.delayedCall(500, cpuTurn, [], this);
-        }
     }
+
+    this.placingCells.push([r, c]);
+    this.playerBoard[r][c] = 1;
+    const cell = this.playerSprites[r][c];
+    cell.setFillStyle(0x2ecc71);
+    cell.isShip = true;
+
+    if (this.placingCells.length === len) {
+        this.placingShipIdx++;
+        nextShipPrompt.call(this);
+    } else {
+        const rem = len - this.placingCells.length;
+        this.subText.setText(rem + ' more cell' + (rem > 1 ? 's' : '') + ' to place');
+    }
+}
+
+// ── Battle ──
+
+function handleShot(r, c) {
+    if (this.cpuHits[r][c] !== null) return;
+    this.playerTurn = false;
+
+    const hit = this.cpuBoard[r][c] === 1;
+    this.cpuHits[r][c] = hit ? 'H' : 'M';
+
+    const cell = this.cpuSprites[r][c];
+    cell.wasShot = true;
+    animateShot.call(this, cell, hit, false);
+
+    if (hit) {
+        this.playerSunk++;
+        this.subText.setText('💥 HIT!');
+        if (this.playerSunk >= this.totalCells) { endGame.call(this, true); return; }
+    } else {
+        this.subText.setText('Miss...');
+    }
+
+    this.statusText.setText('Enemy is thinking...');
+    this.time.delayedCall(Phaser.Math.Between(600, 1100), cpuTurn, [], this);
 }
 
 function cpuTurn() {
+    if (this.state !== 'BATTLE') return;
+
     let r, c;
-    do {
-        r = Phaser.Math.Between(0, GRID_SIZE - 1);
-        c = Phaser.Math.Between(0, GRID_SIZE - 1);
-    } while (this.cpuHits[r][c] !== 0);
 
-    if (this.playerBoard[r][c] === 1) {
-        this.playerGridSprites[r][c].setFillStyle(0xffa500); // Enemy hit you
-        this.cpuHits[r][c] = 'H';
-        this.playerSunk++;
+    if (aiMode === 'target' && aiQueue.length > 0) {
+        [r, c] = aiQueue.shift();
+        while (this.playerHits[r][c] !== null && aiQueue.length > 0) [r, c] = aiQueue.shift();
+        if (this.playerHits[r][c] !== null) { aiMode = 'hunt'; return cpuTurn.call(this); }
     } else {
-        this.playerGridSprites[r][c].setAlpha(0.5); // Enemy missed
-        this.cpuHits[r][c] = 'M';
+        aiMode = 'hunt';
+        const candidates = [];
+        for (let row = 0; row < G; row++)
+            for (let col = 0; col < G; col++)
+                if (this.playerHits[row][col] === null && (row + col) % 2 === 0)
+                    candidates.push([row, col]);
+
+        if (candidates.length === 0) {
+            for (let row = 0; row < G; row++)
+                for (let col = 0; col < G; col++)
+                    if (this.playerHits[row][col] === null)
+                        candidates.push([row, col]);
+        }
+        [r, c] = candidates[Phaser.Math.Between(0, candidates.length - 1)];
     }
 
-    if (this.playerSunk === this.totalShipCells) {
-        endGame.call(this, "DEFEAT! FLEET DESTROYED");
-    }
-}
+    const hit = this.playerBoard[r][c] === 1;
+    this.playerHits[r][c] = hit ? 'H' : 'M';
 
-function placeCpuShips() {
-    let placed = 0;
-    while (placed < this.totalShipCells) {
-        let r = Phaser.Math.Between(0, GRID_SIZE - 1);
-        let c = Phaser.Math.Between(0, GRID_SIZE - 1);
-        if (this.cpuBoard[r][c] === 0) {
-            this.cpuBoard[r][c] = 1;
-            placed++;
+    const cell = this.playerSprites[r][c];
+    cell.wasShot = true;
+    animateShot.call(this, cell, hit, true);
+
+    if (hit) {
+        this.cpuSunk++;
+        aiHits.push([r, c]);
+        aiMode  = 'target';
+        aiQueue = [];
+
+        if (aiHits.length >= 2) {
+            const last  = aiHits[aiHits.length - 1];
+            const prev  = aiHits[aiHits.length - 2];
+            const dr = last[0] - prev[0];
+            const dc = last[1] - prev[1];
+            const nr = last[0] + dr,  nc = last[1] + dc;
+            const br = aiHits[0][0] - dr, bc = aiHits[0][1] - dc;
+            if (nr>=0&&nr<G&&nc>=0&&nc<G) aiQueue.push([nr, nc]);
+            if (br>=0&&br<G&&bc>=0&&bc<G) aiQueue.push([br, bc]);
+        }
+
+        if (aiQueue.length === 0) {
+            [[-1,0],[1,0],[0,-1],[0,1]].forEach(([dr, dc]) => {
+                const nr = r+dr, nc = c+dc;
+                if (nr>=0&&nr<G&&nc>=0&&nc<G&&this.playerHits[nr][nc]===null)
+                    aiQueue.push([nr, nc]);
+            });
+        }
+
+        if (this.cpuSunk >= this.totalCells) { endGame.call(this, false); return; }
+    } else {
+        if (aiMode === 'target' && aiQueue.length === 0) {
+            aiMode = 'hunt'; aiHits = [];
         }
     }
+
+    this.statusText.setText('YOUR TURN — Fire!');
+    this.subText.setText('Click the enemy radar');
+    this.playerTurn = true;
 }
 
-function endGame(msg) {
-    this.gameState = 'GAMEOVER';
-    this.statusText.setText(msg);
-    this.add.text(400, 500, 'CLICK TO RESTART', { fontSize: '20px', fill: '#fff' }).setOrigin(0.5)
-        .setInteractive().on('pointerdown', () => this.scene.restart());
+function animateShot(sprite, hit, isEnemy) {
+    if (hit) {
+        sprite.setFillStyle(0xe94560);
+        for (let i = 0; i < 3; i++) {
+            const ring = this.add.circle(sprite.x, sprite.y, 5 + i*4, 0xff6600, 0.7 - i*0.2).setDepth(5);
+            this.tweens.add({ targets: ring, radius: 30 + i*10, alpha: 0, duration: 350 + i*100, onComplete: () => ring.destroy() });
+        }
+        this.cameras.main.shake(80, 0.006);
+    } else {
+        sprite.setFillStyle(isEnemy ? 0x3a5a7a : 0x1a3a5a);
+        const drop = this.add.circle(sprite.x, sprite.y, 4, 0x7fc8f8).setDepth(5);
+        this.tweens.add({ targets: drop, y: sprite.y + 18, alpha: 0, duration: 300, onComplete: () => drop.destroy() });
+    }
 }
 
+function flashStatus(msg, color) {
+    this.subText.setText(msg).setFill(color);
+    this.time.delayedCall(1000, () => this.subText.setFill('#aaa'));
+}
+
+function endGame(playerWon) {
+    this.state = 'OVER';
+
+    if (playerWon) {
+        const prev = parseInt(localStorage.getItem('battleship_wins') || 0);
+        localStorage.setItem('battleship_wins', prev + 1);
+    } else {
+        // Reveal CPU ships that weren't hit
+        for (let r = 0; r < G; r++)
+            for (let c = 0; c < G; c++)
+                if (this.cpuBoard[r][c] === 1 && this.cpuHits[r][c] !== 'H')
+                    this.cpuSprites[r][c].setFillStyle(0x2ecc71, 0.4);
+    }
+
+    this.add.rectangle(410, 285, 460, 230, 0x000000, 0.9).setDepth(50);
+    this.add.text(410, 195, playerWon ? '⚓ VICTORY!' : '☠  DEFEAT', {
+        fontSize: '46px', fill: playerWon ? '#2ecc71' : '#e94560', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(51);
+    this.add.text(410, 265, playerWon ? 'Enemy fleet destroyed!' : 'Your fleet was sunk...', {
+        fontSize: '20px', fill: '#fff'
+    }).setOrigin(0.5).setDepth(51);
+    this.add.text(410, 310, 'Wins: ' + (localStorage.getItem('battleship_wins') || 0), {
+        fontSize: '17px', fill: '#f1c40f'
+    }).setOrigin(0.5).setDepth(51);
+
+    const btn = this.add.rectangle(410, 365, 240, 44, 0xffffff, 0.08)
+        .setDepth(51)
+        .setStrokeStyle(2, 0x7fb3d3, 0.8)
+        .setInteractive({ useHandCursor: true });
+    this.add.text(410, 365, 'PLAY AGAIN', {
+        fontSize: '20px', fill: '#fff', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(52);
+
+    btn.on('pointerdown', () => { aiMode='hunt'; aiHits=[]; aiQueue=[]; this.scene.restart(); });
+    btn.on('pointermove', () => btn.setFillStyle(0xffffff, 0.2));
+    btn.on('pointerout',  () => btn.setFillStyle(0xffffff, 0.08));
+}
+
+function placeShipsRandom(board) {
+    SHIPS.forEach(len => {
+        let placed = false;
+        while (!placed) {
+            const horiz = Math.random() > 0.5;
+            const r = Phaser.Math.Between(0, G - (horiz ? 1 : len));
+            const c = Phaser.Math.Between(0, G - (horiz ? len : 1));
+            let ok = true;
+            for (let i = 0; i < len && ok; i++) {
+                if (board[r + (horiz ? 0 : i)][c + (horiz ? i : 0)] !== 0) ok = false;
+            }
+            if (ok) {
+                for (let i = 0; i < len; i++) board[r + (horiz ? 0 : i)][c + (horiz ? i : 0)] = 1;
+                placed = true;
+            }
+        }
+    });
+}
+
+function make2D(size, fill) {
+    return Array(size).fill(0).map(() => Array(size).fill(fill));
+}
 </script>
 </body>
 </html>

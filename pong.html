@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pong</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #000; }
+    </style>
+</head>
+<body>
+<script>
+const W          = 700;
+const H          = 500;
+const PADDLE_W   = 12;
+const PADDLE_H   = 80;
+const BALL_SIZE  = 12;
+const WIN_SCORE  = 7;
+const BALL_SPEED = 320;
+// AI moves at most this many px per second — tune for difficulty
+const AI_SPEED   = 260;
+
+const config = {
+    type: Phaser.AUTO,
+    width: W, height: H,
+    backgroundColor: '#050505',
+    scene: { create, update }
+};
+new Phaser.Game(config);
+
+function create() {
+    this.scoreL   = 0;
+    this.scoreR   = 0;
+    this.gameOver = false;
+    this.ballVX   = 0;
+    this.ballVY   = 0;
+    this.serveDir = 1;   // which side the next serve goes toward
+    this.trail    = [];
+    this.trailGfx = null;
+    this.waiting  = false; // true while between points
+
+    // Court markings
+    drawCourt.call(this);
+
+    // Paddles
+    this.paddleL = this.add.rectangle(28,   H/2, PADDLE_W, PADDLE_H, 0x00d2ff).setDepth(5);
+    this.paddleR = this.add.rectangle(W-28, H/2, PADDLE_W, PADDLE_H, 0xff0055).setDepth(5);
+
+    // Ball
+    this.ball = this.add.rectangle(W/2, H/2, BALL_SIZE, BALL_SIZE, 0xffffff).setDepth(5);
+
+    // Score displays
+    this.scoreLText = this.add.text(W/4,   32, '0', {
+        fontSize: '56px', fill: '#00d2ff', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(10);
+    this.scoreRText = this.add.text(3*W/4, 32, '0', {
+        fontSize: '56px', fill: '#ff0055', fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(10);
+
+    // Labels
+    this.add.text(W/2, H - 14, 'YOU  ←  vs  →  CPU', {
+        fontSize: '12px', fill: '#ffffff22', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(5);
+
+    const best = localStorage.getItem('pong_best') || '-';
+    this.bestText = this.add.text(W/2, 14, 'BEST: ' + best, {
+        fontSize: '13px', fill: '#f1c40f66', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(10);
+
+    // Hint shown before first serve
+    this.hintText = this.add.text(W/2, H/2 + 60, 'W / S  to move  •  First to ' + WIN_SCORE + ' wins', {
+        fontSize: '15px', fill: '#ffffff55', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(10);
+
+    // Keyboard
+    this.keys = this.input.keyboard.addKeys({ up: 'W', down: 'S' });
+
+    // Serve after a short delay
+    this.time.delayedCall(800, () => {
+        this.hintText.destroy();
+        serveBall.call(this);
+    });
+}
+
+function drawCourt() {
+    const g = this.add.graphics().setDepth(1);
+    // Dashed centre line
+    for (let y = 8; y < H; y += 28) {
+        g.fillStyle(0xffffff, 0.1);
+        g.fillRect(W/2 - 2, y, 4, 16);
+    }
+    // Faint centre circle
+    g.lineStyle(1, 0xffffff, 0.06);
+    g.strokeCircle(W/2, H/2, 55);
+    // Border
+    g.lineStyle(2, 0xffffff, 0.05);
+    g.strokeRect(2, 2, W-4, H-4);
+}
+
+function serveBall() {
+    if (this.gameOver) return;
+    this.waiting = false;
+    this.ball.x  = W/2;
+    this.ball.y  = H/2;
+    this.trail   = [];
+
+    // Random angle between -30 and +30 degrees, aimed at serveDir side
+    const angle  = Phaser.Math.FloatBetween(-30, 30) * (Math.PI / 180);
+    this.ballVX  = Math.cos(angle) * BALL_SPEED * this.serveDir;
+    this.ballVY  = Math.sin(angle) * BALL_SPEED;
+    this.serveDir *= -1;
+
+    // Fade ball in
+    this.ball.setAlpha(0);
+    this.tweens.add({ targets: this.ball, alpha: 1, duration: 250 });
+}
+
+function update(_, delta) {
+    if (this.gameOver || this.waiting) return;
+    const dt = delta / 1000;
+
+    movePlayer.call(this, dt);
+    moveAI.call(this, dt);
+    moveBall.call(this, dt);
+    drawTrail.call(this);
+}
+
+function movePlayer(dt) {
+    const half  = PADDLE_H / 2;
+    const speed = 430;
+    if (this.keys.up.isDown)   this.paddleL.y = Math.max(half,   this.paddleL.y - speed * dt);
+    if (this.keys.down.isDown) this.paddleL.y = Math.min(H-half, this.paddleL.y + speed * dt);
+}
+
+function moveAI(dt) {
+    // AI tracks the ball but is capped at AI_SPEED px/s so the player can beat it
+    const half   = PADDLE_H / 2;
+    const diff   = this.ball.y - this.paddleR.y;
+    const maxMove = AI_SPEED * dt;
+    const move   = Phaser.Math.Clamp(diff, -maxMove, maxMove);
+    this.paddleR.y = Phaser.Math.Clamp(this.paddleR.y + move, half, H - half);
+}
+
+function moveBall(dt) {
+    this.ball.x += this.ballVX * dt;
+    this.ball.y += this.ballVY * dt;
+
+    const half = BALL_SIZE / 2;
+
+    // Top wall
+    if (this.ball.y < half) {
+        this.ball.y  = half;
+        this.ballVY  = Math.abs(this.ballVY);
+        this.cameras.main.shake(30, 0.003);
+    }
+    // Bottom wall
+    if (this.ball.y > H - half) {
+        this.ball.y  = H - half;
+        this.ballVY  = -Math.abs(this.ballVY);
+        this.cameras.main.shake(30, 0.003);
+    }
+
+    // Left paddle hit
+    if (this.ballVX < 0 &&
+        this.ball.x - half <= this.paddleL.x + PADDLE_W/2 &&
+        this.ball.x + half >= this.paddleL.x - PADDLE_W/2 &&
+        Math.abs(this.ball.y - this.paddleL.y) < PADDLE_H/2 + half) {
+        hitPaddle.call(this, this.paddleL, 1);
+    }
+
+    // Right paddle hit
+    if (this.ballVX > 0 &&
+        this.ball.x + half >= this.paddleR.x - PADDLE_W/2 &&
+        this.ball.x - half <= this.paddleR.x + PADDLE_W/2 &&
+        Math.abs(this.ball.y - this.paddleR.y) < PADDLE_H/2 + half) {
+        hitPaddle.call(this, this.paddleR, -1);
+    }
+
+    // Ball exits left — CPU scores
+    if (this.ball.x < -30) {
+        this.scoreR++;
+        this.scoreRText.setText(this.scoreR);
+        this.tweens.add({ targets: this.scoreRText, scale: 1.5, duration: 100, yoyo: true });
+        if (this.scoreR >= WIN_SCORE) { endGame.call(this, false); return; }
+        nextPoint.call(this);
+    }
+
+    // Ball exits right — player scores
+    if (this.ball.x > W + 30) {
+        this.scoreL++;
+        this.scoreLText.setText(this.scoreL);
+        this.tweens.add({ targets: this.scoreLText, scale: 1.5, duration: 100, yoyo: true });
+        if (this.scoreL >= WIN_SCORE) { endGame.call(this, true); return; }
+        nextPoint.call(this);
+    }
+}
+
+function hitPaddle(paddle, dirSign) {
+    // Angle based on where on the paddle the ball hits
+    const rel   = (this.ball.y - paddle.y) / (PADDLE_H / 2);
+    const angle = rel * 55 * (Math.PI / 180);
+    // Small speed increase each hit, capped at 700
+    const spd   = Math.min(Math.sqrt(this.ballVX**2 + this.ballVY**2) * 1.05, 700);
+    this.ballVX = dirSign * Math.abs(Math.cos(angle) * spd);
+    this.ballVY = Math.sin(angle) * spd;
+
+    // Flash paddle white briefly
+    paddle.setFillStyle(0xffffff);
+    this.time.delayedCall(80, () => {
+        paddle.setFillStyle(paddle === this.paddleL ? 0x00d2ff : 0xff0055);
+    });
+    this.cameras.main.shake(35, 0.004);
+}
+
+function nextPoint() {
+    this.waiting = true;
+    this.ballVX  = 0;
+    this.ballVY  = 0;
+    this.ball.x  = W/2;
+    this.ball.y  = H/2;
+    this.trail   = [];
+    this.time.delayedCall(700, () => serveBall.call(this));
+}
+
+function drawTrail() {
+    this.trail.push({ x: this.ball.x, y: this.ball.y });
+    if (this.trail.length > 10) this.trail.shift();
+
+    if (this.trailGfx) this.trailGfx.destroy();
+    this.trailGfx = this.add.graphics().setDepth(4);
+    this.trail.forEach((pos, i) => {
+        const t     = i / this.trail.length;
+        const alpha = t * 0.55;
+        const size  = BALL_SIZE * t * 0.9;
+        this.trailGfx.fillStyle(0xffffff, alpha);
+        this.trailGfx.fillRect(pos.x - size/2, pos.y - size/2, size, size);
+    });
+}
+
+function endGame(playerWon) {
+    this.gameOver = true;
+    this.ballVX   = 0;
+    this.ballVY   = 0;
+
+    if (playerWon) {
+        const prev = parseInt(localStorage.getItem('pong_best') || 0);
+        if (this.scoreL > prev) localStorage.setItem('pong_best', this.scoreL);
+        this.bestText.setText('BEST: ' + Math.max(this.scoreL, prev));
+    }
+
+    const title = playerWon ? '🏆 YOU WIN!' : '🤖 CPU WINS!';
+    const color = playerWon ? '#00d2ff'     : '#ff0055';
+
+    this.add.rectangle(W/2, H/2, 400, 250, 0x000000, 0.92).setDepth(50);
+    this.add.text(W/2, H/2 - 80, title, {
+        fontSize: '44px', fill: color, fontFamily: 'monospace', fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(51);
+    this.add.text(W/2, H/2 - 10, this.scoreL + '  —  ' + this.scoreR, {
+        fontSize: '36px', fill: '#fff', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(51);
+
+    // Rematch button
+    const btn = this.add.rectangle(W/2, H/2 + 75, 200, 46, 0xffffff, 0.08)
+        .setDepth(51)
+        .setStrokeStyle(2, playerWon ? 0x00d2ff : 0xff0055, 0.8)
+        .setInteractive({ useHandCursor: true });
+    this.add.text(W/2, H/2 + 75, 'PLAY AGAIN', {
+        fontSize: '20px', fill: '#fff', fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(52);
+
+    btn.on('pointerdown', () => this.scene.restart());
+    btn.on('pointermove', () => btn.setFillStyle(0xffffff, 0.2));
+    btn.on('pointerout',  () => btn.setFillStyle(0xffffff, 0.08));
+}
+</script>
+</body>
+</html>
