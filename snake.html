@@ -40,6 +40,24 @@
             z-index: 9999;
         }
 
+        /* Light mode */
+        body.light {
+            --neon-blue:   #0077cc;
+            --neon-pink:   #cc0044;
+            --neon-green:  #00aa55;
+            --neon-purple: #8800cc;
+            --bg:          #f0f3f8;
+            color: #1a1a2e;
+        }
+        body.light::before { opacity: 0.2; }
+        body.light h1 { color: var(--neon-green); text-shadow: 0 0 12px var(--neon-green); }
+        body.light .score-board { color: #1a1a2e; }
+        body.light .controls kbd { background: #dde; color: #1a1a2e; border-color: #aab; }
+        body.light .overlay { background: rgba(240,243,248,0.92); color: #1a1a2e; }
+        body.light .overlay button { border-color: var(--neon-green); color: var(--neon-green); }
+        body.light .overlay button:hover { background: var(--neon-green); color: #000; }
+        body.light .mobile-controls button { background: #dde; color: #1a1a2e; border-color: #aab; }
+
         .game-container {
             text-align: center;
             position: relative;
@@ -438,6 +456,26 @@
         // Show start overlay
         startOverlay.classList.add('active');
         draw();
+
+        // ── Hub communication ────────────────
+        window.addEventListener('message', function (e) {
+            if (e.data && e.data.type === 'theme') {
+                if (e.data.value === 'light') {
+                    document.body.classList.add('light');
+                } else {
+                    document.body.classList.remove('light');
+                }
+            }
+            if (e.data && e.data.type === 'sound') {
+                localStorage.setItem('sound_enabled', e.data.value ? '1' : '0');
+            }
+        });
+
+        // Apply saved theme on direct load
+        (function () {
+            const theme = localStorage.getItem('theme') || 'dark';
+            if (theme === 'light') document.body.classList.add('light');
+        })();
     </script>
 </body>
 </html>

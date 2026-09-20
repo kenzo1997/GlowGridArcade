@@ -6,7 +6,8 @@
     <title>Space Invaders</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
     <style>
-        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #000; }
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #000; font-family: 'Share Tech Mono', monospace; }
+        body.light { background: #e8ecf2; }
     </style>
 </head>
 <body>
@@ -63,6 +64,19 @@ function create() {
     this.invaderBullets = this.physics.add.group();
     this.shields = this.physics.add.group({ immovable: true });
 
+    // Generate bullet textures (must happen before creating sprites that use them)
+    const bulletTex = this.add.graphics();
+    bulletTex.fillStyle(COLORS.bullet);
+    bulletTex.fillRect(0, 0, BULLET_SIZE, BULLET_SIZE);
+    bulletTex.generateTexture('bulletTex', BULLET_SIZE, BULLET_SIZE);
+    bulletTex.destroy();
+
+    const invaderBulletTex = this.add.graphics();
+    invaderBulletTex.fillStyle(0xf1c40f);
+    invaderBulletTex.fillRect(0, 0, BULLET_SIZE, BULLET_SIZE);
+    invaderBulletTex.generateTexture('invaderBulletTex', BULLET_SIZE, BULLET_SIZE);
+    invaderBulletTex.destroy();
+
     // Create backgrounds
     this.add.rectangle(W/2, H/2, W, H, 0x050505);
 
@@ -70,9 +84,9 @@ function create() {
     drawStars.call(this);
 
     // Create player
-    this.player = this.add.rectangle(W/2, H - 50, PLAYER_SIZE, 20, COLORS.player)
-        .setOrigin(0.5);
-    this.physics.add.existing(this.player);
+    this.player = this.physics.add.sprite(W/2, H - 50, 'bulletTex')
+        .setScale(PLAYER_SIZE / BULLET_SIZE, 20 / BULLET_SIZE)
+        .setTint(COLORS.player);
     this.player.body.setImmovable(true);
 
     // Create invaders
@@ -133,10 +147,8 @@ function update(time, delta) {
 
     // Player shooting
     if (Phaser.Input.Keyboard.JustDown(this.spacebar) && this.playerBullets.countActive() < 2) {
-        const bullet = this.add.rectangle(this.player.x, this.player.y - 20, BULLET_SIZE, BULLET_SIZE, COLORS.bullet);
-        this.physics.add.existing(bullet);
-        bullet.body.setVelocity(0, -500);
-        bullet.body.setBounce(0, 0);
+        const bullet = this.physics.add.sprite(this.player.x, this.player.y - 20, 'bulletTex');
+        bullet.setVelocity(0, -500);
         bullet.body.setCollideWorldBounds(false);
         this.playerBullets.add(bullet);
     }
@@ -179,24 +191,26 @@ function createInvaders() {
     const startY = 100;
     const spacing = 8;
 
+    // Generate invader texture if it doesn't exist yet
+    if (!this.textures.exists('invaderTex')) {
+        const invGfx = this.add.graphics();
+        invGfx.fillStyle(0xffffff);
+        invGfx.fillRect(0, 0, INVADER_SIZE, INVADER_SIZE);
+        invGfx.generateTexture('invaderTex', INVADER_SIZE, INVADER_SIZE);
+        invGfx.destroy();
+    }
+
     for (let row = 0; row < INVADER_ROWS; row++) {
-        const scoreValue = row === 0 ? SCORES.bottom : (row === 2 ? SCORES.middle : SCORES.top);
-        const color = row === 0 ? COLORS.invader1 : (row === 2 ? COLORS.invader2 : COLORS.invader3);
+        const scoreValue = row < 1 ? SCORES.top : (row < 3 ? SCORES.middle : SCORES.bottom);
+        const color = row < 1 ? COLORS.invader3 : (row < 3 ? COLORS.invader2 : COLORS.invader1);
 
         for (let col = 0; col < INVADER_COLS; col++) {
             const x = 50 + col * (INVADER_SIZE + spacing);
             const y = startY + row * (INVADER_SIZE + spacing);
 
-            const invader = this.add.rectangle(x, y, INVADER_SIZE, INVADER_SIZE, color);
-            this.physics.add.existing(invader);
+            const invader = this.physics.add.sprite(x, y, 'invaderTex').setTint(color);
             invader.score = scoreValue;
             this.invaders.add(invader);
-
-            // Draw invader shape
-            const gfx = this.add.graphics();
-            gfx.fillStyle(color);
-            gfx.fillRect(x - INVADER_SIZE/2 + 4, y - INVADER_SIZE/2 + 4, INVADER_SIZE - 8, INVADER_SIZE - 8);
-            gfx.fillRect(x - INVADER_SIZE/2 + 8, y - INVADER_SIZE/2 + 12, INVADER_SIZE - 16, 8);
         }
     }
 
@@ -250,10 +264,8 @@ function shootInvader() {
     if (aliveInvaders.length === 0) return;
 
     const shooter = Phaser.Utils.Array.GetRandom(aliveInvaders);
-    const bullet = this.add.rectangle(shooter.x, shooter.y + INVADER_SIZE/2, BULLET_SIZE, BULLET_SIZE, 0xf1c40f);
-    this.physics.add.existing(bullet);
-    bullet.body.setVelocity(0, 200);
-    bullet.body.setBounce(0, 0);
+    const bullet = this.physics.add.sprite(shooter.x, shooter.y + INVADER_SIZE/2, 'invaderBulletTex');
+    bullet.setVelocity(0, 200);
     bullet.body.setCollideWorldBounds(false);
     this.invaderBullets.add(bullet);
 }
@@ -374,6 +386,26 @@ function drawStars() {
         gfx.fillRect(x, y, size, size);
     }
 }
+
+// ── Hub communication ──────────────────────
+window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'theme') {
+        if (e.data.value === 'light') {
+            document.body.classList.add('light');
+        } else {
+            document.body.classList.remove('light');
+        }
+    }
+    if (e.data && e.data.type === 'sound') {
+        localStorage.setItem('sound_enabled', e.data.value ? '1' : '0');
+    }
+});
+
+// Apply saved theme on load
+(function () {
+    const theme = localStorage.getItem('theme') || 'dark';
+    if (theme === 'light') document.body.classList.add('light');
+})();
 </script>
 </body>
 </html>

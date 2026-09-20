@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2048 - GlowGrid Arcade</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --neon-blue:   #00d2ff;
+            --neon-pink:   #ff0055;
+            --neon-green:  #00ff88;
+            --neon-purple: #bf00ff;
+            --neon-amber:  #ffaa00;
+            --bg:          #080c18;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: #fff;
+            font-family: 'Share Tech Mono', monospace;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 2px,
+                rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        body.light {
+            --neon-blue:   #0077cc;
+            --neon-pink:   #cc0044;
+            --neon-green:  #00aa55;
+            --neon-purple: #8800cc;
+            --neon-amber:  #cc8800;
+            --bg:          #f0f3f8;
+            color: #1a1a2e;
+        }
+        body.light::before { opacity: 0.2; }
+        body.light h1 { color: var(--neon-pink); text-shadow: 0 0 12px var(--neon-pink); }
+        body.light .score-board { color: #1a1a2e; }
+        body.light .controls kbd { background: #dde; color: #1a1a2e; border-color: #aab; }
+        body.light .overlay { background: rgba(240,243,248,0.92); color: #1a1a2e; }
+        body.light .overlay button { border-color: var(--neon-pink); color: var(--neon-pink); background: transparent; }
+        body.light .overlay button:hover { background: var(--neon-pink); color: #fff; }
+        body.light .mobile-controls button { background: #dde; color: #1a1a2e; border-color: #aab; }
+        body.light .grid-cell { background: #d5dbe5; }
+        body.light .grid-container { border-color: #ccd5e0; }
+
+        .game-container {
+            text-align: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2.5rem;
+            font-weight: 900;
+            letter-spacing: 8px;
+            color: var(--neon-pink);
+            text-shadow: 0 0 12px var(--neon-pink), 0 0 40px rgba(255,0,85,0.3);
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .score-board {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+            letter-spacing: 2px;
+        }
+
+        .score-item {
+            color: var(--neon-blue);
+            text-shadow: 0 0 8px var(--neon-blue);
+        }
+
+        .score-item span {
+            color: #fff;
+            font-weight: 700;
+        }
+
+        .grid-container {
+            position: relative;
+            width: 400px;
+            height: 400px;
+            margin: 0 auto;
+            border: 3px solid var(--neon-pink);
+            border-radius: 12px;
+            box-shadow: 0 0 30px rgba(255,0,85,0.3), inset 0 0 60px rgba(255,0,85,0.05);
+            background: #0a0f1a;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(4, 1fr);
+            gap: 8px;
+            padding: 8px;
+            overflow: hidden;
+        }
+
+        body.light .grid-container { background: #e0e5ec; }
+
+        .grid-cell {
+            background: #111a2e;
+            border-radius: 8px;
+            box-shadow: inset 0 0 12px rgba(0,0,0,0.4);
+        }
+
+        .tile {
+            position: absolute;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Orbitron', sans-serif;
+            font-weight: 700;
+            transition: top 0.12s ease, left 0.12s ease, box-shadow 0.2s ease;
+            z-index: 2;
+        }
+
+        .tile.new-tile {
+            animation: pop 0.15s ease;
+        }
+
+        .tile.merged {
+            animation: pop 0.18s ease;
+            z-index: 3;
+        }
+
+        @keyframes pop {
+            0%   { transform: scale(0); }
+            60%  { transform: scale(1.12); }
+            100% { transform: scale(1); }
+        }
+
+        /* Tile colors — neon spectrum cool→hot */
+        .tile-2    { background: #1a2a44; color: #c0d0f0; }
+        .tile-4    { background: #0d3b5c; color: #8ee0ff; box-shadow: 0 0 8px rgba(0,210,255,0.15); }
+        .tile-8    { background: #0a5c7a; color: #fff; box-shadow: 0 0 10px rgba(0,210,255,0.25); }
+        .tile-16   { background: #0d6b4a; color: #fff; box-shadow: 0 0 12px rgba(0,255,136,0.25); }
+        .tile-32   { background: #1a8a3a; color: #fff; box-shadow: 0 0 14px rgba(0,255,136,0.3); }
+        .tile-64   { background: #5a8a0a; color: #fff; box-shadow: 0 0 16px rgba(170,255,0,0.3); }
+        .tile-128  { background: #b8780a; color: #fff; font-size: 1.6rem; box-shadow: 0 0 18px rgba(255,170,0,0.35); }
+        .tile-256  { background: #c0480a; color: #fff; font-size: 1.6rem; box-shadow: 0 0 20px rgba(255,100,0,0.4); }
+        .tile-512  { background: #b02040; color: #fff; font-size: 1.6rem; box-shadow: 0 0 22px rgba(255,0,85,0.45); }
+        .tile-1024 { background: #a01570; color: #fff; font-size: 1.3rem; box-shadow: 0 0 24px rgba(255,0,150,0.5); }
+        .tile-2048 { background: #7018b0; color: #fff; font-size: 1.3rem; box-shadow: 0 0 28px rgba(191,0,255,0.6), 0 0 50px rgba(191,0,255,0.25); }
+        .tile-super { background: #1a1a2e; color: #fff; font-size: 1.2rem; box-shadow: 0 0 30px rgba(0,210,255,0.7), 0 0 55px rgba(255,0,85,0.4), 0 0 80px rgba(191,0,255,0.3); border: 2px solid rgba(255,255,255,0.25); }
+
+        .controls {
+            margin-top: 20px;
+            color: #667788;
+            font-size: 0.85rem;
+            letter-spacing: 1px;
+        }
+
+        .controls kbd {
+            background: #1a2a4a;
+            color: var(--neon-blue);
+            padding: 4px 10px;
+            border-radius: 4px;
+            margin: 0 3px;
+            font-family: 'Share Tech Mono', monospace;
+            border: 1px solid var(--neon-blue);
+        }
+
+        .overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(8, 12, 24, 0.95);
+            border: 2px solid var(--neon-pink);
+            border-radius: 12px;
+            padding: 40px 60px;
+            text-align: center;
+            z-index: 10;
+            display: none;
+            box-shadow: 0 0 30px rgba(255,0,85,0.25);
+        }
+
+        .overlay.active { display: block; }
+
+        .overlay h2 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.8rem;
+            color: var(--neon-pink);
+            text-shadow: 0 0 12px var(--neon-pink);
+            margin-bottom: 15px;
+        }
+
+        .overlay p {
+            font-size: 1.1rem;
+            margin-bottom: 25px;
+            color: #aabbcc;
+        }
+
+        .overlay button {
+            background: transparent;
+            color: var(--neon-pink);
+            border: 2px solid var(--neon-pink);
+            border-radius: 8px;
+            padding: 12px 40px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.9rem;
+            font-weight: 700;
+            letter-spacing: 3px;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+        }
+
+        .overlay button:hover {
+            background: var(--neon-pink);
+            color: #000;
+            box-shadow: 0 0 20px rgba(255,0,85,0.5);
+        }
+
+        .overlay button:active {
+            transform: translateY(2px);
+        }
+
+        .win-actions { display: none; margin-top: 15px; gap: 12px; }
+        .win-actions.show { display: flex; justify-content: center; }
+
+        .mobile-controls {
+            display: none;
+            margin-top: 20px;
+            gap: 10px;
+        }
+
+        .mobile-controls button {
+            background: var(--neon-pink);
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            width: 60px;
+            height: 60px;
+            font-size: 1.5rem;
+            cursor: pointer;
+            box-shadow: 0 3px 0 #8b0030, 0 0 15px rgba(255,0,85,0.3);
+        }
+
+        .mobile-controls button:active {
+            transform: translateY(2px);
+            box-shadow: 0 1px 0 #8b0030, 0 0 8px rgba(255,0,85,0.3);
+        }
+
+        .dpad-row { display: flex; justify-content: center; gap: 10px; }
+        .dpad-col { display: flex; flex-direction: column; gap: 10px; }
+
+        @media (max-width: 600px) {
+            .mobile-controls { display: block; }
+            .grid-container { width: 92vw; height: 92vw; gap: 5px; padding: 5px; }
+            h1 { font-size: 1.8rem; }
+            .score-board { gap: 20px; font-size: 0.9rem; }
+            .overlay { padding: 30px 30px; }
+            .tile { font-size: 1rem !important; }
+            .tile-128, .tile-256, .tile-512 { font-size: 1.2rem !important; }
+            .tile-1024, .tile-2048, .tile-super { font-size: 0.95rem !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>2048</h1>
+        <div class="score-board">
+            <div class="score-item">SCORE: <span id="score">0</span></div>
+            <div class="score-item">BEST: <span id="highScore">0</span></div>
+        </div>
+        <div class="grid-container" id="gridContainer">
+            <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
+            <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
+            <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
+            <div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div><div class="grid-cell"></div>
+        </div>
+        <div class="controls">
+            <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> — Swipe on mobile
+        </div>
+
+        <div class="mobile-controls">
+            <div class="dpad-row">
+                <div class="dpad-col">
+                    <button data-dir="up">▲</button>
+                    <button data-dir="down">▼</button>
+                </div>
+                <div class="dpad-col">
+                    <button data-dir="left">◀</button>
+                    <button data-dir="right">▶</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="overlay" id="startOverlay">
+            <h2>2048</h2>
+            <p>Join the tiles, get to <strong>2048</strong>!</p>
+            <button id="startBtn">START</button>
+        </div>
+
+        <div class="overlay" id="gameOverOverlay">
+            <h2>GAME OVER</h2>
+            <p>Score: <span id="finalScore">0</span></p>
+            <button id="restartBtn">PLAY AGAIN</button>
+        </div>
+    </div>
+
+    <script>
+        const gridContainer = document.getElementById('gridContainer');
+        const scoreEl = document.getElementById('score');
+        const highScoreEl = document.getElementById('highScore');
+        const startOverlay = document.getElementById('startOverlay');
+        const gameOverOverlay = document.getElementById('gameOverOverlay');
+        const finalScoreEl = document.getElementById('finalScore');
+        const startBtn = document.getElementById('startBtn');
+        const restartBtn = document.getElementById('restartBtn');
+
+        const SIZE = 4;
+        let tiles = [];
+        let score = 0;
+        let highScore = parseInt(localStorage.getItem('2048_best')) || 0;
+        let gameRunning = false;
+        let tileIdCounter = 0;
+        let animating = false;
+
+        highScoreEl.textContent = highScore;
+
+        function getTileSize() {
+            const rect = gridContainer.getBoundingClientRect();
+            const gap = parseInt(getComputedStyle(gridContainer).gap) || 8;
+            const padding = parseInt(getComputedStyle(gridContainer).padding) || 8;
+            const avail = rect.width - padding * 2 - gap * (SIZE - 1);
+            return Math.floor(avail / SIZE);
+        }
+
+        function getTilePos(row, col) {
+            const ts = getTileSize();
+            const gap = parseInt(getComputedStyle(gridContainer).gap) || 8;
+            const padding = parseInt(getComputedStyle(gridContainer).padding) || 8;
+            return {
+                top: padding + row * (ts + gap),
+                left: padding + col * (ts + gap),
+                size: ts
+            };
+        }
+
+        function renderTile(tile) {
+            let el = document.getElementById('tile-' + tile.id);
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'tile-' + tile.id;
+                el.className = 'tile';
+                gridContainer.appendChild(el);
+            }
+
+            const { top, left, size } = getTilePos(tile.row, tile.col);
+            el.style.width = size + 'px';
+            el.style.height = size + 'px';
+            el.style.top = top + 'px';
+            el.style.left = left + 'px';
+            el.style.lineHeight = size + 'px';
+            el.textContent = tile.value;
+
+            // Clear old value classes
+            el.className = 'tile';
+            if (tile.value <= 2048) {
+                el.classList.add('tile-' + tile.value);
+            } else {
+                el.classList.add('tile-super');
+            }
+
+            // Adjust font size based on value and tile size
+            const digits = String(tile.value).length;
+            let fontSize = size * 0.44;
+            if (digits >= 4) fontSize = size * 0.28;
+            if (digits >= 5) fontSize = size * 0.22;
+            if (digits >= 6) fontSize = size * 0.18;
+            el.style.fontSize = fontSize + 'px';
+        }
+
+        function removeTile(id) {
+            const el = document.getElementById('tile-' + id);
+            if (el) el.remove();
+        }
+
+        function renderAllTiles() {
+            tiles.forEach(t => renderTile(t));
+        }
+
+        function spawnTile() {
+            const empty = [];
+            for (let r = 0; r < SIZE; r++) {
+                for (let c = 0; c < SIZE; c++) {
+                    if (!tiles.some(t => t.row === r && t.col === c)) {
+                        empty.push({ row: r, col: c });
+                    }
+                }
+            }
+            if (empty.length === 0) return;
+            const pos = empty[Math.floor(Math.random() * empty.length)];
+            const value = Math.random() < 0.9 ? 2 : 4;
+            const tile = { id: tileIdCounter++, value, row: pos.row, col: pos.col };
+            tiles.push(tile);
+            renderTile(tile);
+            // Small delay then add animation class
+            requestAnimationFrame(() => {
+                const el = document.getElementById('tile-' + tile.id);
+                if (el) {
+                    el.classList.add('new-tile');
+                    el.addEventListener('animationend', () => el.classList.remove('new-tile'), { once: true });
+                }
+            });
+        }
+
+        function canMove() {
+            if (tiles.length < SIZE * SIZE) return true;
+            for (let r = 0; r < SIZE; r++) {
+                for (let c = 0; c < SIZE; c++) {
+                    const val = getTileValue(r, c);
+                    if (c < SIZE - 1 && val === getTileValue(r, c + 1)) return true;
+                    if (r < SIZE - 1 && val === getTileValue(r + 1, c)) return true;
+                }
+            }
+            return false;
+        }
+
+        function getTileValue(row, col) {
+            const t = tiles.find(t => t.row === row && t.col === col);
+            return t ? t.value : 0;
+        }
+
+        function slideLine(lineTiles) {
+            // lineTiles: array of {id, value, row, col} for a row or column in traversal order
+            const result = [];
+
+            for (let i = 0; i < lineTiles.length; i++) {
+                const current = lineTiles[i];
+                if (result.length > 0 && result[result.length - 1].value === current.value && !result[result.length - 1].merged) {
+                    // Merge
+                    const mergedTile = {
+                        id: current.id,
+                        oldId: result[result.length - 1].id,
+                        value: current.value * 2,
+                        merged: true
+                    };
+                    result[result.length - 1] = mergedTile;
+                    score += mergedTile.value;
+                } else {
+                    result.push({ id: current.id, value: current.value, merged: false });
+                }
+            }
+
+            return result;
+        }
+
+        function move(dRow, dCol) {
+            if (!gameRunning || animating) return;
+
+            // Snapshot to detect actual changes
+            const before = tiles.map(t => ({ id: t.id, value: t.value, row: t.row, col: t.col }));
+            const mergedIds = [];
+            animating = true;
+
+            if (dRow !== 0) {
+                // Vertical move
+                for (let c = 0; c < SIZE; c++) {
+                    const col = [];
+                    const rowOrder = dRow === -1 ? [0, 1, 2, 3] : [3, 2, 1, 0];
+                    for (const r of rowOrder) {
+                        const t = tiles.find(t => t.row === r && t.col === c);
+                        if (t) col.push({ ...t });
+                    }
+                    if (col.length === 0) continue;
+
+                    const result = slideLine(col);
+                    let newRow = dRow === -1 ? 0 : 3;
+                    for (const item of result) {
+                        const tile = tiles.find(t => t.id === item.id);
+                        if (tile) {
+                            tile.row = newRow;
+                            tile.col = c;
+                            tile.value = item.value;
+                            if (item.merged) {
+                                mergedIds.push(tile.id);
+                                const oldTile = tiles.find(t => t.id === item.oldId);
+                                if (oldTile) {
+                                    removeTile(oldTile.id);
+                                    tiles = tiles.filter(t => t.id !== oldTile.id);
+                                }
+                            }
+                        }
+                        newRow -= dRow;
+                    }
+                }
+            } else {
+                // Horizontal move
+                for (let r = 0; r < SIZE; r++) {
+                    const row = [];
+                    const colOrder = dCol === -1 ? [0, 1, 2, 3] : [3, 2, 1, 0];
+                    for (const c of colOrder) {
+                        const t = tiles.find(t => t.row === r && t.col === c);
+                        if (t) row.push({ ...t });
+                    }
+                    if (row.length === 0) continue;
+
+                    const result = slideLine(row);
+                    let newCol = dCol === -1 ? 0 : 3;
+                    for (const item of result) {
+                        const tile = tiles.find(t => t.id === item.id);
+                        if (tile) {
+                            tile.row = r;
+                            tile.col = newCol;
+                            tile.value = item.value;
+                            if (item.merged) {
+                                mergedIds.push(tile.id);
+                                const oldTile = tiles.find(t => t.id === item.oldId);
+                                if (oldTile) {
+                                    removeTile(oldTile.id);
+                                    tiles = tiles.filter(t => t.id !== oldTile.id);
+                                }
+                            }
+                        }
+                        newCol -= dCol;
+                    }
+                }
+            }
+
+            // Detect if board actually changed (position, value, or tile count)
+            const changed = tiles.some(t => {
+                const b = before.find(x => x.id === t.id);
+                return !b || b.value !== t.value || b.row !== t.row || b.col !== t.col;
+            }) || before.length !== tiles.length;
+
+            tiles.forEach(t => renderTile(t));
+
+            // Add merge animation
+            mergedIds.forEach(id => {
+                const el = document.getElementById('tile-' + id);
+                if (el) {
+                    el.classList.add('merged');
+                    el.addEventListener('animationend', () => el.classList.remove('merged'), { once: true });
+                }
+            });
+
+            if (changed) {
+                scoreEl.textContent = score;
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('2048_best', highScore);
+                    highScoreEl.textContent = highScore;
+                }
+            }
+
+            // Only spawn a new tile if the board actually changed
+            setTimeout(() => {
+                if (changed) {
+                    spawnTile();
+                }
+
+                animating = false;
+
+                if (!canMove()) {
+                    endGame();
+                }
+            }, 130);
+        }
+
+        function endGame() {
+            gameRunning = false;
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('2048_best', highScore);
+                highScoreEl.textContent = highScore;
+            }
+            finalScoreEl.textContent = score;
+            gameOverOverlay.classList.add('active');
+        }
+
+        function startGame() {
+            // Clear all tiles
+            tiles.forEach(t => removeTile(t.id));
+            tiles = [];
+            score = 0;
+            scoreEl.textContent = score;
+            tileIdCounter = 0;
+            gameRunning = true;
+            animating = false;
+            startOverlay.classList.remove('active');
+            gameOverOverlay.classList.remove('active');
+
+            spawnTile();
+            spawnTile();
+        }
+
+        function handleKeydown(e) {
+            if (!gameRunning) return;
+
+            switch (e.key) {
+                case 'ArrowUp':    case 'w': case 'W': e.preventDefault(); move(-1, 0); break;
+                case 'ArrowDown':  case 's': case 'S': e.preventDefault(); move(1, 0);  break;
+                case 'ArrowLeft':  case 'a': case 'A': e.preventDefault(); move(0, -1); break;
+                case 'ArrowRight': case 'd': case 'D': e.preventDefault(); move(0, 1);  break;
+            }
+        }
+
+        // Touch swipe
+        let touchStartX = 0;
+        let touchStartY = 0;
+        const SWIPE_THRESHOLD = 30;
+
+        document.addEventListener('touchstart', e => {
+            if (!gameRunning) return;
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        document.addEventListener('touchend', e => {
+            if (!gameRunning) return;
+            const dx = e.changedTouches[0].clientX - touchStartX;
+            const dy = e.changedTouches[0].clientY - touchStartY;
+            const absDx = Math.abs(dx);
+            const absDy = Math.abs(dy);
+
+            if (Math.max(absDx, absDy) < SWIPE_THRESHOLD) return;
+
+            if (absDx > absDy) {
+                move(0, dx > 0 ? 1 : -1);
+            } else {
+                move(dy > 0 ? 1 : -1, 0);
+            }
+        });
+
+        // Mobile D-pad
+        document.querySelectorAll('.mobile-controls button').forEach(btn => {
+            btn.addEventListener('touchstart', e => {
+                e.preventDefault();
+                if (!gameRunning) return;
+                const dir = btn.dataset.dir;
+                if (dir === 'up') move(-1, 0);
+                if (dir === 'down') move(1, 0);
+                if (dir === 'left') move(0, -1);
+                if (dir === 'right') move(0, 1);
+            });
+            btn.addEventListener('click', e => {
+                if (!gameRunning) return;
+                const dir = btn.dataset.dir;
+                if (dir === 'up') move(-1, 0);
+                if (dir === 'down') move(1, 0);
+                if (dir === 'left') move(0, -1);
+                if (dir === 'right') move(0, 1);
+            });
+        });
+
+        document.addEventListener('keydown', handleKeydown);
+        startBtn.addEventListener('click', startGame);
+        restartBtn.addEventListener('click', startGame);
+
+        // Show start overlay
+        startOverlay.classList.add('active');
+        renderAllTiles();
+
+        // Resize handler — re-render tiles on window resize
+        window.addEventListener('resize', () => {
+            tiles.forEach(t => renderTile(t));
+        });
+
+        window.addEventListener('message', function (e) {
+            if (e.data && e.data.type === 'theme') {
+                if (e.data.value === 'light') {
+                    document.body.classList.add('light');
+                } else {
+                    document.body.classList.remove('light');
+                }
+            }
+            if (e.data && e.data.type === 'sound') {
+                localStorage.setItem('sound_enabled', e.data.value ? '1' : '0');
+            }
+        });
+
+        (function () {
+            const theme = localStorage.getItem('theme') || 'dark';
+            if (theme === 'light') document.body.classList.add('light');
+        })();
+    </script>
+</body>
+</html>

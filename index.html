@@ -7,13 +7,36 @@
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <style>
         :root {
-            --neon-blue:  #00d2ff;
-            --neon-pink:  #ff0055;
-            --neon-green: #00ff88;
-            --bg:         #080c18;
-            --card-bg:    #0e1628;
-            --card-border:#1e2a45;
+            --neon-blue:   #00d2ff;
+            --neon-pink:   #ff0055;
+            --neon-green:  #00ff88;
+            --bg:          #080c18;
+            --card-bg:     #0e1628;
+            --card-border: #1e2a45;
+            --text-dim:    #8899aa;
+            --sub-color:   #ffffff44;
         }
+
+        /* Light mode overrides */
+        body.light {
+            --neon-blue:   #0077cc;
+            --neon-pink:   #cc0044;
+            --neon-green:  #00aa55;
+            --bg:          #f0f3f8;
+            --card-bg:     #ffffff;
+            --card-border: #ccd5e0;
+            --text-dim:    #556677;
+            --sub-color:   #55667788;
+            color: #1a1a2e;
+        }
+        body.light .card-title { color: #1a1a2e; }
+        body.light .card-btn { color: #fff; }
+        body.light .arcade-window { border-color: #ccd5e0; background: #e8ecf2; }
+        body.light .back-btn { color: var(--neon-blue); border-color: var(--neon-blue); }
+        body.light .back-btn:hover { color: #000; background: var(--neon-blue); }
+
+        /* Scanline is a dark-mode effect — dim it in light mode */
+        body.light::before { opacity: 0.2; }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -56,8 +79,39 @@
             margin-top: 10px;
             font-size: 0.8rem;
             letter-spacing: 5px;
-            color: #ffffff44;
+            color: var(--sub-color);
             text-transform: uppercase;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        .tool-btn {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.72rem;
+            letter-spacing: 2px;
+            padding: 8px 18px;
+            border-radius: 24px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            background: var(--card-bg);
+            color: var(--text-dim);
+            border: 1px solid var(--card-border);
+        }
+        .tool-btn:hover {
+            border-color: var(--neon-blue);
+            color: var(--neon-blue);
+            box-shadow: 0 0 14px rgba(0,210,255,0.15);
+        }
+        .tool-btn.active {
+            border-color: var(--neon-green);
+            color: var(--neon-green);
+            box-shadow: 0 0 10px rgba(0,255,136,0.2);
         }
 
         /* Grid */
@@ -186,7 +240,11 @@
 <div id="hub">
     <div class="header">
         <h1>GlowGrid</h1>
-        <div class="sub">Arcade — 10 Games</div>
+        <div class="sub">Arcade — 12 Games</div>
+        <div class="toolbar">
+            <button class="tool-btn" id="btn-theme" onclick="toggleTheme()" title="Toggle dark/light mode">🌓 THEME</button>
+            <button class="tool-btn active" id="btn-sound" onclick="toggleSound()" title="Toggle sound">🔊 SOUND</button>
+        </div>
     </div>
 
     <div class="grid">
@@ -248,7 +306,7 @@
             <div class="card-title">DODGE & CATCH</div>
             <div class="card-desc">Grab the gems, avoid the bombs.</div>
             <div class="card-footer">
-                <div class="card-score"></div>
+                <div class="card-score" id="score-dc"></div>
                 <button class="card-btn">LAUNCH</button>
             </div>
         </div>
@@ -306,6 +364,28 @@
             </div>
         </div>
 
+        <div class="card" onclick="launch('missile_command.html')">
+            <span class="badge-new">NEW</span>
+            <div class="card-icon">🚀</div>
+            <div class="card-title">MISSILE COMMAND</div>
+            <div class="card-desc">Defend your cities from ballistic missiles. 3 bases, limited ammo.</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-mc"></div>
+                <button class="card-btn">LAUNCH</button>
+            </div>
+        </div>
+
+        <div class="card" onclick="launch('2048.html')">
+            <span class="badge-new">NEW</span>
+            <div class="card-icon">🔢</div>
+            <div class="card-title">2048</div>
+            <div class="card-desc">Join the numbers. Slide tiles, merge doubles, reach the 2048 tile!</div>
+            <div class="card-footer">
+                <div class="card-score" id="score-2048"></div>
+                <button class="card-btn">LAUNCH</button>
+            </div>
+        </div>
+
     </div>
 </div>
 
@@ -319,15 +399,18 @@
 
 <script>
     const SCORES = [
-        { id: 'score-frog',   key: 'frogger_best',         label: 'BEST' },
-        { id: 'score-mine',   key: 'minedash_best',         label: 'BEST' },
-        { id: 'score-bs',     key: 'battleship_wins',       label: 'WINS' },
-        { id: 'score-pong',   key: 'pong_best',             label: 'BEST' },
-        { id: 'score-ms',     key: 'minesweeper_best_easy', label: 'BEST' },
-        { id: 'score-tetris', key: 'tetris_best',           label: 'BEST' },
-        { id: 'score-c4',     key: 'c4_wins',               label: 'WINS' },
-        { id: 'score-invaders', key: 'spaceinvaders_best',  label: 'BEST' },
-        { id: 'score-snake',  key: 'snake_best',            label: 'BEST' },
+        { id: 'score-frog',     key: 'frogger_best',           label: 'BEST' },
+        { id: 'score-mine',     key: 'minedash_best',           label: 'BEST' },
+        { id: 'score-bs',       key: 'battleship_wins',         label: 'WINS' },
+        { id: 'score-pong',     key: 'pong_best',               label: 'BEST' },
+        { id: 'score-ms',       key: 'minesweeper_best_easy',   label: 'BEST' },
+        { id: 'score-tetris',   key: 'tetris_best',             label: 'BEST' },
+        { id: 'score-c4',       key: 'c4_wins',                 label: 'WINS' },
+        { id: 'score-invaders', key: 'spaceinvaders_best',      label: 'BEST' },
+        { id: 'score-snake',    key: 'snake_best',              label: 'BEST' },
+        { id: 'score-mc',       key: 'missile_command_best',    label: 'BEST' },
+        { id: 'score-dc',       key: 'dc_best',                 label: 'BEST' },
+        { id: 'score-2048',     key: '2048_best',               label: 'BEST' },
     ];
 
     function loadScores() {
@@ -341,10 +424,64 @@
     }
     loadScores();
 
+    // ── Theme ────────────────────────────────
+    function applyTheme(theme) {
+        if (theme === 'light') {
+            document.body.classList.add('light');
+            document.getElementById('btn-theme').classList.add('active');
+        } else {
+            document.body.classList.remove('light');
+            document.getElementById('btn-theme').classList.remove('active');
+        }
+        localStorage.setItem('theme', theme);
+        notifyGame({ type: 'theme', value: theme });
+    }
+
+    function toggleTheme() {
+        const cur = localStorage.getItem('theme') || 'dark';
+        applyTheme(cur === 'dark' ? 'light' : 'dark');
+    }
+
+    // ── Sound ────────────────────────────────
+    function applySound(on) {
+        const btn = document.getElementById('btn-sound');
+        if (on) {
+            btn.classList.add('active');
+            btn.textContent = '🔊 SOUND';
+        } else {
+            btn.classList.remove('active');
+            btn.textContent = '🔇 MUTED';
+        }
+        localStorage.setItem('sound_enabled', on ? '1' : '0');
+        notifyGame({ type: 'sound', value: on });
+    }
+
+    function toggleSound() {
+        const cur = localStorage.getItem('sound_enabled') || '1';
+        applySound(cur !== '1');
+    }
+
+    // ── iframe communication ────────────────
+    function notifyGame(msg) {
+        const frame = document.getElementById('game-frame');
+        if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage(msg, '*');
+        }
+    }
+
+    // ── Launch / close ──────────────────────
     function launch(url) {
         document.getElementById('hub').style.display = 'none';
         document.getElementById('arcade-wrap').style.display = 'flex';
-        document.getElementById('game-frame').src = url;
+        const frame = document.getElementById('game-frame');
+        frame.src = url;
+        // send current settings once the iframe loads
+        frame.onload = function () {
+            const theme = localStorage.getItem('theme') || 'dark';
+            const sound = (localStorage.getItem('sound_enabled') || '1') === '1';
+            notifyGame({ type: 'theme', value: theme });
+            notifyGame({ type: 'sound', value: sound });
+        };
         window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -354,6 +491,14 @@
         document.getElementById('hub').style.display = 'block';
         loadScores();
     }
+
+    // ── Init ─────────────────────────────────
+    (function init() {
+        const theme = localStorage.getItem('theme') || 'dark';
+        applyTheme(theme);
+        const sound = (localStorage.getItem('sound_enabled') || '1') === '1';
+        applySound(sound);
+    })();
 </script>
 </body>
 </html>
